@@ -1,7 +1,8 @@
+import type {HttpError, Row} from './types';
 export type PlayReport = {playbackId: string; trackId: string; kind: 'live' | 'rap' | 'preview'};
 type Outbox = {read: () => string | null; write: (value: string) => void};
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-export function speakerPlayReport(snapshot: any, player: {key: string; ready: boolean} | null, enabled: boolean): PlayReport | null {
+export function speakerPlayReport(snapshot: Row | null | undefined, player: {key: string; ready: boolean} | null, enabled: boolean): PlayReport | null {
   const e = snapshot?.event;
   if (!enabled || !snapshot?.isOwner || !player?.ready || !e?.current_track || e.announcement_id || player.key !== e.playback_id) return null;
   return {playbackId: e.playback_id, trackId: e.current_track, kind: e.current_entry ? 'rap' : 'live'};
@@ -34,7 +35,7 @@ export class PlayCounter {
     try {
       for (const [id, report] of this.pending) {
         if (this.stopped) break;
-        try {await this.send(report);} catch (error: any) {
+        try {await this.send(report);} catch(caught_error){const error=caught_error as HttpError;
           if (error?.status !== 400 && error?.status !== 404) break;
           // A deleted track or invalid saved report cannot block later counts.
         }

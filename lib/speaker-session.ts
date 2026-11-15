@@ -1,3 +1,4 @@
+import type {HttpError} from './types';
 type Ownership = {speakerOwnedHere?: boolean; speakerHere?: boolean};
 export const hasSpeakerControl = (snapshot: Ownership) => snapshot.speakerOwnedHere === true || snapshot.speakerHere === true;
 
@@ -17,7 +18,7 @@ export class SpeakerHeartbeat {
     this.pending = true;
     try {
       await this.send();if (this.active) this.status(true, '');
-    } catch (error: any) {
+    } catch(caught_error){const error=caught_error as HttpError;
       if (!this.active) return;
       if (error?.status === 409 && error?.code === 'speaker_taken_over') {this.active = false;this.revoked();}
       else this.status(false, error?.status === 401

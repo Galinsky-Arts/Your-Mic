@@ -1,14 +1,5 @@
 import {api} from './api';
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      ARTIST_PASSWORD?: string;
-      SESSION_SECRET?: string;
-    }
-  }
-}
-
 const cookieName = '__Host-ym-artist';
 const lifetime = 12 * 60 * 60;
 const encoder = new TextEncoder();

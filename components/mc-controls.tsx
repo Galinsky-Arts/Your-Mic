@@ -2,39 +2,45 @@
 import {useEffect, useRef, useState} from 'react';
 import {Mic, LoaderCircle, Check} from 'lucide-react';
 import {MC_TEXT_LIMIT, mcSpecialPlan, mcTrackPlan} from '../lib/mc';
+import type {HttpError, Requester, Row, Snapshot} from '../lib/types';
+import type {useMc} from '../lib/use-mc';
 
-export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: any; request: (path: string, options?: RequestInit) => Promise<any>; accept: (snapshot: any) => void; mc: any; onEnd: () => void}) {
+export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: Snapshot; request: Requester; accept: (snapshot: Snapshot) => void; mc: ReturnType<typeof useMc>; onEnd: () => void}) {
   const event = snapshot.event, tracks = snapshot.tracks;
   const [selected, setSelected] = useState(''), [draft, setDraft] = useState(''), [custom, setCustom] = useState(false), [saveState, setSaveState] = useState(''), [draftSelection, setDraftSelection] = useState('');
+  // eslint-disable-next-line react-hooks/refs -- latest-value ref read by the debounced save
   const latest = useRef(snapshot);latest.current = snapshot;
-  const saveQueue = useRef<Promise<any>>(Promise.resolve());
+  const saveQueue = useRef<Promise<Row | void>>(Promise.resolve());
   const editNumber = useRef(0), audio = useRef<HTMLAudioElement | null>(null);
-  useEffect(() => {if (!selected || selected !== 'intro' && selected !== 'outro' && !tracks.some((track: any) => 'start:'+track.id === selected || 'end:'+track.id === selected)) setSelected(event.current_track || tracks[0]?.id ? 'end:'+(event.current_track || tracks[0]?.id) : 'intro');}, [event.id, selected, event.current_track, tracks]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- keeps the selection valid when tracks change
+  useEffect(() => {if (!selected || selected !== 'intro' && selected !== 'outro' && !tracks.some((track) => 'start:'+track.id === selected || 'end:'+track.id === selected)) setSelected(event.current_track || tracks[0]?.id ? 'end:'+(event.current_track || tracks[0]?.id) : 'intro');}, [event.id, selected, event.current_track, tracks]);
   const selection = selected || (event.current_track || tracks[0]?.id ? 'end:'+(event.current_track || tracks[0]?.id) : 'intro');
   const special = selection === 'intro' || selection === 'outro';
   const part = selection.startsWith('start:') ? 'start' : 'end', trackId = special ? '' : selection.slice(selection.indexOf(':')+1);
-  const track = tracks.find((t: any) => t.id === trackId);
-  const stored = special ? event[selection + '_text'] || '' : track?.[part === 'start' ? 'mc_intro_text' : 'mc_text'] || '';
+  const track = tracks.find((t) => t.id === trackId);
+  const stored = special ? (event as Row)[selection + '_text'] || '' : track?.[part === 'start' ? 'mc_intro_text' : 'mc_text'] || '';
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the saved text when the selected announcement changes
   useEffect(() => {setDraftSelection(selection);setDraft(stored);setCustom(!!stored);setSaveState('');editNumber.current++;}, [selection, event.id]);
-  const saveSettings = async (values: any) => {
-    try {accept(await request(`events/${event.id}/mc`, {method: 'PATCH', body: JSON.stringify(values)}));}
-    catch (error: any) {setSaveState(error.message);}
+  const saveSettings = async (values: Row) => {
+    try {accept(await request(`events/${event.id}/mc`, {method: 'PATCH', body: JSON.stringify(values)}) as Snapshot);}
+    catch(caught_error){const error=caught_error as HttpError;setSaveState(error.message);}
   };
   useEffect(() => {
     const value = custom ? draft : '';
     if (draftSelection !== selection || value === stored) return;
     const number = ++editNumber.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- shows the saving state for the debounced autosave
     setSaveState('Saving…');
     const timer = setTimeout(async () => {
       try {
         const save = () => request(`events/${event.id}/mc`, {method: 'PATCH', body: JSON.stringify(special ? {[selection + 'Text']: value} : {trackId, part, text: value})});
         saveQueue.current = saveQueue.current.catch(() => {}).then(save);
-        const result = await saveQueue.current;
+        const result = await saveQueue.current as Row;
         if (number !== editNumber.current) return;
-        accept(result);setSaveState(result.speechAvailable ? 'Saved. Preparing voice…' : 'Saved');
+        accept(result as Snapshot);setSaveState(result.speechAvailable ? 'Saved. Preparing voice…' : 'Saved');
         const prepared = await mc.prepare(special ? selection : part === 'start' ? 'track-start' : 'track-end', special ? undefined : trackId, true);
         if (number === editNumber.current) setSaveState(!result.speechAvailable ? 'Saved · Voice activates on Cloudflare' : prepared ? 'Saved · Recording ready' : 'Saved · Previous ready recording stays in place');
-      } catch (error: any) {if (number === editNumber.current) setSaveState(error.message || 'Could not save. Try again.');}
+      } catch(caught_error){const error=caught_error as HttpError;if (number === editNumber.current) setSaveState(error.message || 'Could not save. Try again.');}
     }, 650);
     return () => clearTimeout(timer);
   }, [draft, custom, draftSelection, selection, event.id, stored, request]);
@@ -61,7 +67,7 @@ export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: an
     <label className="mc-label" htmlFor="mc-script">Edit announcement</label>
     <select id="mc-script" value={selection} onChange={e => setSelected(e.target.value)}>
       <option value="intro">Opening announcement (optional)</option>
-      {tracks.map((track: any) => <optgroup label={track.title} key={track.id}><option value={"start:"+track.id}>Before: {track.title}</option><option value={"end:"+track.id}>After: {track.title}</option></optgroup>)}
+      {tracks.map((track) => <optgroup label={track.title} key={track.id}><option value={"start:"+track.id}>Before: {track.title}</option><option value={"end:"+track.id}>After: {track.title}</option></optgroup>)}
       <option value="outro">Closing announcement (optional)</option>
     </select>
     <div className="mc-mode" role="group" aria-label="Announcement wording">
