@@ -1,4 +1,5 @@
 import {MILES_MODEL} from './miles.mjs';
+import type {Row} from './types';
 export const MC_MODEL = '@cf/deepgram/aura-2-en';
 export const MC_VOICE = 'zeus';
 export const MC_MILES_MODEL = MILES_MODEL;
@@ -14,7 +15,7 @@ export type McPlan = {context: string; text: string; kind: McKind; nextTrackId: 
 
 // A track's closing credit never names its successor. Its opening recording is
 // independent of the preceding song, so queue changes cannot create a false cue.
-export function mcTrackPlan(event: any, track: any, kind: 'track-start' | 'track-end', entry: any = null): McPlan | null {
+export function mcTrackPlan(event: Row, track: Row | null | undefined, kind: 'track-start' | 'track-end', entry: Row | null = null): McPlan | null {
   if (!track || event.mc_enabled === 0) return null;
   const variant = Math.abs(Number(track.position) || 0) % 3;
   const title = spokenTrackTitle(track.title);
@@ -28,7 +29,7 @@ export function mcTrackPlan(event: any, track: any, kind: 'track-start' | 'track
     nextTrackId: kind === 'track-start' ? track.id : null, nextEntryId: rapper?.id || null};
 }
 
-export function mcSpecialPlan(event: any, kind: 'intro' | 'outro'): McPlan {
+export function mcSpecialPlan(event: Row, kind: 'intro' | 'outro'): McPlan {
   const values: Record<string, string> = {artist: event.artist, album: event.album || event.title, event: event.title};
   const fallback = kind === 'intro'
     ? `Welcome to ${event.title}! This is ${event.artist}${event.album ? `, bringing you ${event.album}` : ''}. Find your beat, join the mic line, and let’s get into it!`
@@ -39,7 +40,7 @@ export function mcSpecialPlan(event: any, kind: 'intro' | 'outro'): McPlan {
 
 // The context excludes the script: a late edit may use the previous recording,
 // but a changed performer, track, or playback mode must never use a stale callout.
-export function mcPlan(event: any, tracks: any[], pick: any): McPlan | null {
+export function mcPlan(event: Row, tracks: Row[], pick: Row): McPlan | null {
   if (event.end_after_track) return event.outro_enabled ? mcSpecialPlan(event, 'outro') : null;
   const previous = tracks.find(t => t.id === event.current_track);
   if (!previous || !pick.track || event.mc_enabled === 0) return null;
@@ -61,7 +62,7 @@ export function mcPlan(event: any, tracks: any[], pick: any): McPlan | null {
   };
 }
 
-export function mcPreparationKey(event: any, tracks: any[], pick: any) {
+export function mcPreparationKey(event: Row, tracks: Row[], pick: Row) {
   const plan = mcPlan(event, tracks, pick);
   return plan ? JSON.stringify([plan.context, plan.text]) : '';
 }

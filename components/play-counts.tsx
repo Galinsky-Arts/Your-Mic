@@ -1,15 +1,17 @@
 'use client';
 import {useCallback, useEffect, useState} from 'react';
 import {ChevronDown, ChevronUp, RotateCcw} from 'lucide-react';
+import type {Requester} from '../lib/types';
 type Counts = {tracks: Array<{id: string; title: string; livePlays: number; rapPlays: number; privatePlays: number}>; totalLivePlays: number; totalRapPlays: number; totalPrivatePlays: number};
-export function PlayCounts({eventId, request}: {eventId: string; request: (path: string, options?: RequestInit) => Promise<any>}) {
+export function PlayCounts({eventId, request}: {eventId: string; request: Requester}) {
   const [open, setOpen] = useState(false), [counts, setCounts] = useState<Counts | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState('');
   const refresh = useCallback(async () => {
     setLoading(true);setError('');
-    try {setCounts(await request(`events/${eventId}/plays`, {signal: AbortSignal.timeout(10000)}));}
+    try {setCounts(await request(`events/${eventId}/plays`, {signal: AbortSignal.timeout(10000)}) as Counts);}
     catch {setError('Counts could not load. Try Refresh counts when connected.');}
     finally {setLoading(false);}
   }, [eventId, request]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetches counts when the panel opens
   useEffect(() => {if (open) void refresh();}, [open, refresh]);
   return <section className="play-counts" aria-label="Artist play counts">
     <div className="play-counts-head"><button className="text-button" aria-expanded={open} aria-controls="play-counts-results" onClick={() => setOpen(v => !v)}>{open ? <ChevronUp size={16}/> : <ChevronDown size={16}/>} Play counts <span className="eyebrow">ARTIST ONLY</span></button>{open && <button className="text-button" disabled={loading} onClick={() => void refresh()}><RotateCcw size={14}/>{loading ? 'Loading counts…' : 'Refresh counts'}</button>}</div>

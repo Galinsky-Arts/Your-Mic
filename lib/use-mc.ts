@@ -3,20 +3,23 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {mcTrackPlan, mcSpecialPlan, type McPlan, type McKind} from './mc';
 import {releaseUnusedMediaUrls} from './media-urls';
 import {nextSelection} from './playback';
+import type {Requester, Snapshot} from './types';
 
 export type ReadyMc = {id: string; context: string; text: string; url: string; order: number};
-export const upcomingMc = (s: any) => s ? mcTrackPlan(s.event, s.tracks.find((t: any) => t.id === s.event.current_track), 'track-end') : null;
-export function useMc(snapshot: any, admin: boolean, request: (path: string, options?: RequestInit) => Promise<any>) {
+export const upcomingMc = (s: Snapshot | null | undefined) => s ? mcTrackPlan(s.event, s.tracks.find((t) => t.id === s.event.current_track), 'track-end') : null;
+export function useMc(snapshot: Snapshot | null, admin: boolean, request: Requester) {
+  // eslint-disable-next-line react-hooks/refs -- latest-value ref read by async preparation jobs
   const current = useRef(snapshot);current.current = snapshot;
-  const cache = useRef(new Map<string, ReadyMc>()), recordings = useRef(new Map<string, ReadyMc>()), inFlight = useRef(new Map<string, Promise<any>>());
+  const cache = useRef(new Map<string, ReadyMc>()), recordings = useRef(new Map<string, ReadyMc>()), inFlight = useRef(new Map<string, Promise<unknown>>());
   const retired = useRef(new Set<string>()), order = useRef(0);
   const [status, setStatus] = useState(''), [revision, setRevision] = useState(0);
   const eventId = snapshot?.event.id || '', voice = snapshot?.mcVoiceKey || snapshot?.mcVoice || 'Zeus';
+  // eslint-disable-next-line react-hooks/refs -- latest-value ref used to discard results for a previous event or voice
   const identity = useRef('');identity.current = `${eventId}:${voice}`;
   const prepare = useCallback(async (kind: McKind = 'track-end', trackId?: string, force = false, entryId?: string) => {
     const s = current.current;if (!s?.isOwner) return null;
-    const track = s.tracks.find((t: any) => t.id === (trackId || s.event.current_track));
-    const entry = entryId ? s.queue.find((q: any) => q.id === entryId) : null;
+    const track = s.tracks.find((t) => t.id === (trackId || s.event.current_track));
+    const entry = entryId ? s.queue.find((q) => q.id === entryId) : null;
     const plan = kind === 'intro' || kind === 'outro' ? mcSpecialPlan(s.event, kind) : mcTrackPlan(s.event, track, kind === 'track-start' ? 'track-start' : 'track-end', entry);
     if (!plan) return null;
     const ready = cache.current.get(plan.context);
@@ -65,19 +68,20 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
     inFlight.current.set(key, job);return job;
   }, [eventId, voice, request]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clears cached recordings when the event or voice changes
     cache.current.clear();recordings.current.clear();inFlight.current.clear();setStatus('');
     return () => {releaseUnusedMediaUrls(retired.current, document.querySelectorAll('audio'), url => URL.revokeObjectURL(url));};
   }, [eventId, voice]);
   const enabled = admin && snapshot?.isOwner && snapshot.speechAvailable;
-  const catalogKey = snapshot ? JSON.stringify([snapshot.event.artist, snapshot.event.album, snapshot.event.title, snapshot.event.mc_enabled, snapshot.event.intro_enabled, snapshot.event.intro_text, snapshot.event.outro_enabled, snapshot.event.outro_text, snapshot.tracks.map((t: any) => [t.id, t.title, t.position, t.mc_text, t.mc_intro_text])]) : '';
+  const catalogKey = snapshot ? JSON.stringify([snapshot.event.artist, snapshot.event.album, snapshot.event.title, snapshot.event.mc_enabled, snapshot.event.intro_enabled, snapshot.event.intro_text, snapshot.event.outro_enabled, snapshot.event.outro_text, snapshot.tracks.map((t) => [t.id, t.title, t.position, t.mc_text, t.mc_intro_text])]) : '';
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false, running = false;
     const run = async () => {
       if (running) return;running = true;
       try {
-        const s = current.current;
-        const jobs: Array<[McKind, string?]> = [...(s.event.intro_enabled ? [['intro'] as [McKind]] : []), ...(s.event.outro_enabled ? [['outro'] as [McKind]] : []), ...(s.event.mc_enabled ? s.tracks.flatMap((t: any) => [['track-start', t.id], ['track-end', t.id]]) : [])];
+        const s = current.current!;
+        const jobs: Array<[McKind, string?]> = [...(s.event.intro_enabled ? [['intro'] as [McKind]] : []), ...(s.event.outro_enabled ? [['outro'] as [McKind]] : []), ...(s.event.mc_enabled ? s.tracks.flatMap((t): Array<[McKind, string]> => [['track-start', t.id], ['track-end', t.id]]) : [])];
         // The current pair is prioritized by the effect below. Catalog jobs
         // stop at the provider throttle and retry later instead of busy polling.
         for (const [kind, track] of jobs) {if (cancelled) return;if (!await prepare(kind, track)) break;}
@@ -85,7 +89,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
     };
     void run();const timer = setInterval(run, 15000);return () => {cancelled = true;clearInterval(timer);};
   }, [enabled, catalogKey, prepare]);
-  const queueKey = snapshot ? JSON.stringify(snapshot.queue.map((q: any) => [q.id, q.track_id, q.name])) : '';
+  const queueKey = snapshot ? JSON.stringify(snapshot.queue.map((q) => [q.id, q.track_id, q.name])) : '';
   const currentTrack = snapshot?.event.current_track || '';
   const next = snapshot ? nextSelection(snapshot.event, snapshot.tracks, snapshot.queue) : null;
   const priorityKey = JSON.stringify([currentTrack, next?.track?.id, next?.entry?.id, catalogKey]);
@@ -93,7 +97,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
     if (!enabled) return;
     let cancelled = false;
     const run = async () => {
-      const s = current.current;
+      const s = current.current!;
       if (s.event.current_track) await prepare('track-end', s.event.current_track);
       const pick = nextSelection(s.event, s.tracks, s.queue);
       if (pick.track) await prepare('track-start', pick.track.id, false, pick.entry?.id);
@@ -102,14 +106,14 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
     void run();const timer = setInterval(run, 12000);return () => {cancelled = true;clearInterval(timer);};
   }, [enabled, priorityKey, queueKey, prepare]);
   const get = (plan: McPlan | null) => plan ? cache.current.get(plan.context) || null : null;
-  const boundary = (s: any, action: string, trackId?: string) => {
+  const boundary = (s: Snapshot, action: string, trackId?: string) => {
     const e = s.event;
-    const pick = action === 'select' ? {track: s.tracks.find((t: any) => t.id === trackId), entry: null} : action === 'finish-announcement' && e.announcement_kind === 'intro' ? {track: s.tracks.find((t: any) => t.id === e.current_track), entry: s.queue.find((q: any) => q.id === e.current_entry)} : nextSelection(e, s.tracks, s.queue);
+    const pick = action === 'select' ? {track: s.tracks.find((t) => t.id === trackId), entry: null} : action === 'finish-announcement' && e.announcement_kind === 'intro' ? {track: s.tracks.find((t) => t.id === e.current_track), entry: s.queue.find((q) => q.id === e.current_entry)} : nextSelection(e, s.tracks, s.queue);
     const generic = mcTrackPlan(e, pick.track, 'track-start');
     return {splitMc: true, closingClipId: get(upcomingMc(s))?.id, openingClipId: get(mcTrackPlan(e, pick.track, 'track-start', pick.entry))?.id, genericOpeningClipId: get(generic)?.id,
       // The server can select a just-arrived queue song after this request was
       // formed. All ready generic introductions are safe for that actual pick.
-      trackOpeningClips: Object.fromEntries(s.tracks.map((t: any) => [t.id, get(mcTrackPlan(e, t, 'track-start'))?.id]).filter((x: any[]) => x[1])),
+      trackOpeningClips: Object.fromEntries(s.tracks.map((t) => [t.id, get(mcTrackPlan(e, t, 'track-start'))?.id]).filter((x) => x[1])),
       introClipId: get(mcSpecialPlan(e, 'intro'))?.id, outroClipId: get(mcSpecialPlan(e, 'outro'))?.id};
   };
   return {status, revision, prepare, get, boundary, readyClips: () => [...recordings.current.values()], special: (kind: 'intro' | 'outro') => get(current.current ? mcSpecialPlan(current.current.event, kind) : null), audioSrc: (id: string) => recordings.current.get(id)?.url || `/api/mc-audio/${id}`};

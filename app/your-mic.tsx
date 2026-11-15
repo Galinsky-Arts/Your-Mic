@@ -11,19 +11,19 @@ import {nextSelection} from '../lib/playback';
 import {SpeakerHeartbeat,SpeakerResume,hasSpeakerControl} from '../lib/speaker-session';
 import {SpeakerOpening} from '../lib/speaker-opening';
 import {Mic,ArrowUpRight,ArrowRight,Play,Pause,Headphones,Plus,ChevronUp,ChevronDown,SkipForward,Volume2,Radio,Check, X,Mail,Music2,Upload,Link as LinkIcon,Download,Users,Settings2,LoaderCircle,Disc3,LogOut,Copy,RotateCcw,Trash2} from 'lucide-react';
-type Track={id:string;title:string;position:number;duration:number;beat_duration:number|null;hasBeat:number;rapAllowed?:number;audioRevision?:string;beatRevision?:string;mc_text?:string;mc_intro_text?:string};
-type Entry={id:string;track_id:string;name:string;status:string;mine:boolean};
-type EventInfo={mc_enabled:number;announcement_id:string|null;announcement_kind:string|null;intro_played:number;intro_enabled:number;intro_text?:string;outro_enabled:number;outro_text?:string;end_after_track:number;show_ended:number;id:string;title:string;artist:string;album:string;record_label:string;playback_id:string;location:string;queue_open:number;mode:string;pending_mode:string|null;mic_after_track:string|null;status:string;current_track:string|null;current_entry:string|null;album_cursor:string|null;position:number;started_at:number|null;version:number;controller_until:number};
-type Snapshot={speechAvailable?:boolean;mcVoice?:string;mcVoiceKey?:string;mcExpressivity?:number;milesReady?:boolean;announcementText?:string|null;event:EventInfo;tracks:Track[];queue:Entry[];isOwner:boolean;speakerOwnedHere?:boolean;speakerHere:boolean;lastTurn:{id:string;name:string;trackTitle:string}|null;serverNow:number};
+import type {Track,Entry,EventInfo,Snapshot,HttpError,Row} from '../lib/types';
+type SpeakerFailureInfo={name?:string;mediaCode?:unknown;message?:string}|null|undefined;
 const seconds=(n:number)=>Number.isFinite(n)?`${Math.floor(Math.max(0,n)/60)}:${Math.floor(Math.max(0,n)%60).toString().padStart(2,'0')}`:'0:00';
 function id(){return globalThis.crypto?.randomUUID?.()||'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=crypto.getRandomValues(new Uint8Array(1))[0]%16;return(c==='x'?r:(r&3)|8).toString(16);});}
 const passBrowser=():PassBrowser=>({storage:()=>window.localStorage,cookies:()=>document.cookie,setCookie:v=>{document.cookie=v;},newId:id});
 function Dialog({open,onClose,children,label}:{open:boolean;onClose:()=>void;children:ReactNode;label:string}){const ref=useRef<HTMLDialogElement>(null);useEffect(()=>{if(open&&!ref.current?.open)ref.current?.showModal();if(!open&&ref.current?.open)ref.current.close();},[open]);return <dialog ref={ref} onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}} aria-label={label}><button className="icon-button dialog-close" aria-label="Close" onClick={onClose}><X size={20}/></button>{children}</dialog>;}
 function Bars(){return <span className="bars" aria-hidden="true"><i/><i/><i/><i/></span>;}
+// eslint-disable-next-line @next/next/no-html-link-for-pages -- a full page load intentionally resets all event, queue-pass and speaker state
 function Logo(){return <a className="logo" href="/" aria-label="Your Mic home"><span className="logo-icon"><Mic size={20} strokeWidth={2.5}/></span>YOUR MIC<span className="lime">.</span></a>;}
+const speakerIdentity=(event:EventInfo)=>event.playback_id||(event.announcement_id?`mc:${event.announcement_id}`:`${event.current_track}:${event.current_entry||'album'}`);
 export default function YourMic({admin=false}:{admin?:boolean}){
  const [passSaved,setPassSaved]=useState(true),[passDialog,setPassDialog]=useState(false),[passRestored,setPassRestored]=useState(false),[resumeEvent,setResumeEvent]=useState('');
- const [ready,setReady]=useState(false),[me,setMe]=useState<any>(null),[eventId,setEventId]=useState(''),[snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<any[]>([]);
+ const [ready,setReady]=useState(false),[me,setMe]=useState<Row|null>(null),[eventId,setEventId]=useState(''),[snapshot,setSnapshot]=useState<Snapshot|null>(null),[events,setEvents]=useState<Row[]>([]);
  const [controlsExpanded,setControlsExpanded]=useState(false),[trackChanging,setTrackChanging]=useState(false);
  const trackChangeBusy=useRef(false);
  const [error,setError]=useState(''),[toast,setToast]=useState(''),[busy,setBusy]=useState(false),[network,setNetwork]=useState(true),[lastSync,setLastSync]=useState(0);
@@ -40,11 +40,11 @@ export default function YourMic({admin=false}:{admin?:boolean}){
  const speakerFailure=useRef<(error:unknown)=>void>(()=>{});
  const speakerPlayer=useRef<SpeakerPlayback|null>(null),audioCache=useRef<SpeakerAudioCache|null>(null);
  const [speakerLoading,setSpeakerLoading]=useState(false);
- const speakerBusy=useRef(false),speakerEnabled=useRef(false),wakeLock=useRef<any>(null),serverOffset=useRef(0),lastSeenVersion=useRef(-1);
+ const speakerBusy=useRef(false),speakerEnabled=useRef(false),wakeLock=useRef<WakeLockSentinel|null>(null),serverOffset=useRef(0),lastSeenVersion=useRef(-1);
  const notify=(v:string)=>{setToast(v);window.setTimeout(()=>setToast(''),4500);};
  const request=useCallback(async(path:string,options:RequestInit={})=>{
   const headers=new Headers(options.headers);if(guest.current)headers.set('X-Guest-Token',guest.current);if(controller.current)headers.set('X-Controller-Token',controller.current);if(options.body&&typeof options.body==='string')headers.set('Content-Type','application/json');
-  const response=await fetch('/api/'+path,{...options,headers,cache:'no-store'});const data:any=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||'Please try again.'),{status:response.status,code:data.code});return data;
+  const response=await fetch('/api/'+path,{...options,headers,cache:'no-store'});const data:Row=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||'Please try again.'),{status:response.status,code:data.code});return data;
  },[]);
  useEffect(()=>{
   if(!snapshot||!eventId||admin&&!snapshot.isOwner)return;
@@ -56,15 +56,18 @@ export default function YourMic({admin=false}:{admin?:boolean}){
  },[admin,!!snapshot,snapshot?.isOwner,eventId,request]);
  const recordPlay=()=>{const s=snap.current,p=speakerPlayer.current;if(s&&p?.ready&&speakerEnabled.current&&s.event.announcement_kind==='track-start'&&p.key===s.event.playback_id&&opening.current.begin(s.event,{key:p.key,source:p.source,status:s.event.status,position:0})){void advance();}try{const report=speakerPlayReport(snap.current,speakerPlayer.current,speakerEnabled.current);if(report)playCounter.current?.record(report);}catch{}};
  const accept=useCallback((s:Snapshot)=>{if(s.event.id===snap.current?.event.id&&s.event.version<lastSeenVersion.current)return;lastSeenVersion.current=s.event.version;snap.current=s;serverOffset.current=s.serverNow-Date.now();setSnapshot(s);setLastSync(Date.now());setNetwork(true);},[]);
- const load=useCallback(async()=>{if(!eventId)return;try{accept(await request('events/'+eventId));}catch(err:any){setNetwork(false);if(err.status===404)setError(err.message);}},[eventId,request,accept]);
+ const load=useCallback(async()=>{if(!eventId)return;try{accept(await request('events/'+eventId) as Snapshot);}catch(caught_err){const err=caught_err as HttpError;setNetwork(false);if(err.status===404)setError(err.message);}},[eventId,request,accept]);
  useEffect(()=>{
   const query=new URLSearchParams(window.location.search),event=query.get('event')||'';
   try{controller.current=sessionStorage.getItem('ym-controller')||id();sessionStorage.setItem('ym-controller',controller.current);}catch{controller.current=id();}
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- browser storage and URL are read after mount so the server render and hydration match
   const browser=passBrowser();setName(readSaved(browser,'ym-name')||'');setResumeEvent(lastQueueEvent(browser)||'');
   setEventId(event);setReady(true);request('me').then(setMe).catch(()=>setMe({signedIn:false}));
  },[request]);
- useEffect(()=>{if(!ready)return;request(admin?'mine':'events').then(d=>{setEvents(d.events);if(admin&&!eventId&&d.events.length){const remembered=localStorage.getItem('ym-last-event');const chosen=d.events.find((x:any)=>x.id===remembered)||d.events[0];chooseEvent(chosen.id);}}).catch(err=>{if(!admin||me?.signedIn)setError(err.message);});},[ready,admin,me?.signedIn]);
+ const chooseEvent=(value:string)=>{if(value!==snap.current?.event.id&&speakerEnabled.current&&snap.current?.event.status==='playing'){notify('Pause the speaker before switching events.');return;}setEventId(value);history.replaceState(null,'',`${admin?'/admin':'/'}?event=${encodeURIComponent(value)}`);if(admin)localStorage.setItem('ym-last-event',value);};
+ useEffect(()=>{if(!ready)return;request(admin?'mine':'events').then(d=>{setEvents(d.events);if(admin&&!eventId&&d.events.length){const remembered=localStorage.getItem('ym-last-event');const chosen=d.events.find((x:Row)=>x.id===remembered)||d.events[0];chooseEvent(chosen.id);}}).catch(err=>{if(!admin||me?.signedIn)setError(err.message);});},[ready,admin,me?.signedIn]);
  useEffect(()=>{if(!eventId)return;
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- switching events must reset per-event state and restore the queue pass from browser storage
   try{const pass=loadQueuePass(passBrowser(),eventId,window.location.hash);guest.current=pass.token;setPassSaved(pass.durable);setPassRestored(pass.restored);if(new URLSearchParams(window.location.hash.slice(1)).has('queue-pass')){const url=new URL(window.location.href);const hash=new URLSearchParams(url.hash.slice(1));hash.delete('queue-pass');url.hash=hash.toString();history.replaceState(null,'',url.pathname+url.search+url.hash);}}catch{setError('This event link is invalid. Scan the event QR code again.');return;}
   opening.current.clear();setControlsExpanded(false);lastSeenVersion.current=-1;snap.current=null;setSnapshot(null);setError('');setTurnDismissed('');setLiveFollow(false);setSpeakerActive(false);speakerEnabled.current=false;speakerPlayer.current?.stop();audioCache.current?.dispose();audioCache.current=null;preview.current?.pause();setSelected(null);setSubscribed(false);setSignup(false);
   try{setSubscribed(localStorage.getItem('ym-subscribed-'+eventId)==='yes');if(!admin&&!sessionStorage.getItem('ym-seen-'+eventId)&&localStorage.getItem('ym-subscribed-'+eventId)!=='yes'){setSignup(true);sessionStorage.setItem('ym-seen-'+eventId,'yes');}}catch{}
@@ -86,9 +89,9 @@ export default function YourMic({admin=false}:{admin?:boolean}){
 
  useEffect(()=>{if(!admin||!snapshot?.isOwner)return;request('events/'+eventId+'/subscribers').then(d=>setSubscriberCount(d.count)).catch(()=>{});},[snapshot?.isOwner,eventId,admin,request]);
  const mc=useMc(snapshot,admin,request);
- const chooseEvent=(value:string)=>{if(value!==snap.current?.event.id&&speakerEnabled.current&&snap.current?.event.status==='playing'){notify('Pause the speaker before switching events.');return;}setEventId(value);history.replaceState(null,'',`${admin?'/admin':'/'}?event=${encodeURIComponent(value)}`);if(admin)localStorage.setItem('ym-last-event',value);};
- const act=async(path:string,data:any,method='POST')=>{setError('');setBusy(true);try{const result=await request(path,{method,body:JSON.stringify(data)});if(result.event)accept(result);return result;}catch(err:any){setError(err.message);throw err;}finally{setBusy(false);}};
- const control=useCallback(async(action:string,extra:any={})=>{const s=snap.current;if(!s)return;if(['claim','select','next','end'].includes(action))opening.current.clear();const p=speakerPlayer.current,position=p?.ready?(p.key===speakerIdentity(s.event)?p.position:opening.current.holdingMusic(s.event,p.key)?0:undefined):undefined;const d=await request(`events/${s.event.id}/control`,{method:'POST',signal:AbortSignal.timeout(8000),body:JSON.stringify({action,controller:controller.current,version:s.event.version,...mc.boundary(s,action,extra.trackId),...(action==='pause'&&position!==undefined?{position,playbackId:s.event.playback_id}:{}),...extra})});accept(d);return d;},[request,accept,mc.revision]);
+ const act=async(path:string,data:unknown,method='POST')=>{setError('');setBusy(true);try{const result=await request(path,{method,body:JSON.stringify(data)});if(result.event)accept(result as Snapshot);return result;}catch(caught_err){const err=caught_err as HttpError;setError(err.message);throw err;}finally{setBusy(false);}};
+ const control=useCallback(async(action:string,extra:Row={})=>{const s=snap.current;if(!s)return;if(['claim','select','next','end'].includes(action))opening.current.clear();const p=speakerPlayer.current,position=p?.ready?(p.key===speakerIdentity(s.event)?p.position:opening.current.holdingMusic(s.event,p.key)?0:undefined):undefined;const d=await request(`events/${s.event.id}/control`,{method:'POST',signal:AbortSignal.timeout(8000),body:JSON.stringify({action,controller:controller.current,version:s.event.version,...mc.boundary(s,action,extra.trackId),...(action==='pause'&&position!==undefined?{position,playbackId:s.event.playback_id}:{}),...extra})});accept(d as Snapshot);return d;},[request,accept,mc.revision]);
+ // eslint-disable-next-line react-hooks/refs -- latest-callback ref: the resume handler always sees the newest control()
  resumeServer.current=async key=>{const s=snap.current;if(!s||s.event.playback_id!==key&&!opening.current.holdingMusic(s.event,key)){pendingResume.current?.clear();return;}return control('play',{playbackId:s.event.playback_id});};
  const advance=useCallback(async()=>{
   if(speakerBusy.current||!speakerEnabled.current)return;
@@ -98,25 +101,25 @@ export default function YourMic({admin=false}:{admin?:boolean}){
    ?control('finish-announcement',{announcementId:s.event.announcement_id,version:s.event.version})
    :control('next',{mcClipId:mc.get(upcomingMc(s))?.id,version:s.event.version});
   try{if(before)await transition(before);}
-  catch(err:any){
+  catch(caught_err){const err=caught_err as HttpError;
    if(err.status===409&&before){
-    try{const fresh:Snapshot=await request('events/'+before.event.id);const a=before.event,b=fresh.event;
+    try{const fresh=await request('events/'+before.event.id) as Snapshot;const a=before.event,b=fresh.event;
      if(speakerEnabled.current&&fresh.speakerHere&&a.current_track===b.current_track&&a.current_entry===b.current_entry&&a.announcement_id===b.announcement_id&&a.playback_id===b.playback_id&&b.status==='playing')await transition(fresh);
      else accept(fresh);
-    }catch(retry:any){if(retry.status===409)await load();else setSpeakerError(retry.message);}
+    }catch(caught_retry){const retry=caught_retry as HttpError;if(retry.status===409)await load();else setSpeakerError(retry.message);}
    }else setSpeakerError(err.message);
   }finally{speakerBusy.current=false;}
  },[control,load,request,accept,mc.revision]);
  // A failed boundary request is retried only for the same ended decoder.
  // A committed-but-lost response is reconciled by playback_id, never skipped twice.
  useEffect(()=>{if(!speakerActive)return;const timer=setInterval(()=>{const e=snap.current?.event,p=speakerPlayer.current;if(speakerEnabled.current&&e?.status==='playing'&&p?.ended&&p.key===speakerIdentity(e))void advance();},2000);return()=>clearInterval(timer);},[speakerActive,advance]);
- useEffect(()=>{const visible=()=>{if(document.visibilityState==='visible'&&speakerEnabled.current&&(!wakeLock.current||wakeLock.current.released)&&(navigator as any).wakeLock)void (navigator as any).wakeLock.request('screen').then((lock:any)=>{wakeLock.current=lock;}).catch(()=>{});};const leave=(event:BeforeUnloadEvent)=>{if(speakerEnabled.current&&snap.current?.event.status==='playing')event.preventDefault();};document.addEventListener('visibilitychange',visible);window.addEventListener('beforeunload',leave);return()=>{document.removeEventListener('visibilitychange',visible);window.removeEventListener('beforeunload',leave);};},[]);
+ useEffect(()=>{const visible=()=>{if(document.visibilityState==='visible'&&speakerEnabled.current&&(!wakeLock.current||wakeLock.current.released)&&navigator.wakeLock)void navigator.wakeLock.request('screen').then((lock)=>{wakeLock.current=lock;}).catch(()=>{});};const leave=(event:BeforeUnloadEvent)=>{if(speakerEnabled.current&&snap.current?.event.status==='playing')event.preventDefault();};document.addEventListener('visibilitychange',visible);window.addEventListener('beforeunload',leave);return()=>{document.removeEventListener('visibilitychange',visible);window.removeEventListener('beforeunload',leave);};},[]);
+ // eslint-disable-next-line react-hooks/refs -- latest-callback ref: the speaker failure handler always sees current state setters
  speakerFailure.current=(error:unknown)=>{const e=snap.current?.event,p=speakerPlayer.current;if(e&&p&&opening.current.holdingMusic(e,p.key)){opening.current.clear();setOpeningRevision(v=>v+1);setSpeakerError('That announcement could not finish. Continuing to the buffered music.');return;}if(!currentSpeakerFailure(p?.key,e))return;
-  console.warn('Your Mic speaker failure',{name:(error as any)?.name,code:(error as any)?.mediaCode,message:(error as any)?.message,playbackId:e!.playback_id,position:p?.position});
+  console.warn('Your Mic speaker failure',{name:(error as SpeakerFailureInfo)?.name,code:(error as SpeakerFailureInfo)?.mediaCode,message:(error as SpeakerFailureInfo)?.message,playbackId:e!.playback_id,position:p?.position});
   if(e!.announcement_id){setSpeakerError('That announcement could not play. Continuing to the music.');void advance();return;}
   setSpeakerError(speakerFailureMessage(error));
  };
- const speakerIdentity=(event:EventInfo)=>event.playback_id||(event.announcement_id?`mc:${event.announcement_id}`:`${event.current_track}:${event.current_entry||'album'}`);
  const musicSource=(track:Track,beat=false)=>`/api/audio/${track.id}?${beat?'beat=1&':''}v=${encodeURIComponent((beat&&track.hasBeat?track.beatRevision:track.audioRevision)||'')}`;
  const cache=()=>audioCache.current||(audioCache.current=new SpeakerAudioCache());
  useEffect(()=>{
@@ -132,6 +135,7 @@ export default function YourMic({admin=false}:{admin?:boolean}){
  },[snapshot,admin,mc.revision]);
  useEffect(()=>{
   const s=snapshot,a=speaker.current;if(!admin||!s||!a||!speakerEnabled.current)return;
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reports a revoked artist session found while syncing the speaker to a new snapshot
   if(!s.isOwner){setSpeakerError('Artist sign-in expired. The buffered song continues; sign in again before the next track.');return;}
   if(!hasSpeakerControl(s)){pendingResume.current?.clear();opening.current.clear();speakerPlayer.current?.stop();speakerEnabled.current=false;setSpeakerActive(false);setSpeakerError('Speaker control moved to another device.');return;}
   const e=s.event,t=s.tracks.find(t=>t.id===e.current_track);
@@ -144,11 +148,14 @@ export default function YourMic({admin=false}:{admin?:boolean}){
  },[snapshot,admin,speakerActive,control,mc.revision,openingRevision]);
 
  useEffect(()=>{const s=snap.current;if(speakerActive&&speakerEnabled.current&&s?.speakerHere&&s.event.status==='idle'&&!s.event.show_ended&&(s.event.mode==='mic'?s.queue.some(q=>q.status==='waiting'):s.tracks.length>0))advance();},[snapshot,speakerActive,advance]);
+ const livePosition=(e:EventInfo)=>Math.max(0,e.position+(e.status==='playing'&&e.started_at?(Date.now()+serverOffset.current-e.started_at)/1000:0));
+ // eslint-disable-next-line react-hooks/immutability -- playPreview is only called after render, from this effect, once it has been declared
  useEffect(()=>{if(admin||!liveFollow||!snapshot)return;const t=snapshot.tracks.find(t=>t.id===snapshot.event.current_track);if(t&&!snapshot.event.announcement_id&&snapshot.event.status==='playing'){const beat=!!snapshot.event.current_entry;if(selected?.id!==t.id||previewBeat!==beat)playPreview(t,beat,true);else if(preview.current){if(Math.abs(preview.current.currentTime-livePosition(snapshot.event))>4)preview.current.currentTime=livePosition(snapshot.event);if(preview.current.paused)preview.current.play().catch(()=>{});}}else preview.current?.pause();},[snapshot,liveFollow]);
+ // eslint-disable-next-line react-hooks/set-state-in-effect -- ends listen-along when this browser's own turn starts
  useEffect(()=>{if(!snapshot?.queue.some(q=>q.mine&&q.id===snapshot.event.current_entry))return;preview.current?.pause();setLiveFollow(false);setPassDialog(false);},[snapshot?.event.current_entry]);
+ // eslint-disable-next-line react-hooks/set-state-in-effect -- shows the completed-turn screen once per turn (deduplicated in localStorage)
  useEffect(()=>{const turn=snapshot?.lastTurn;if(!turn||admin)return;try{if(localStorage.getItem('ym-finished-'+turn.id))return;localStorage.setItem('ym-finished-'+turn.id,'yes');}catch{}setSignup(false);setJoin(null);setCompleted(turn);},[snapshot?.lastTurn?.id,admin]);
  useEffect(()=>()=>{speakerPlayer.current?.stop();audioCache.current?.dispose();wakeLock.current?.release?.();},[]);
- const livePosition=(e:EventInfo)=>Math.max(0,e.position+(e.status==='playing'&&e.started_at?(Date.now()+serverOffset.current-e.started_at)/1000:0));
  const playPreview=async(t:Track,beat=false,follow=false)=>{if(admin){await selectSpeakerTrack(t);return;}if(!preview.current)return;setLiveFollow(follow);setSelected(t);setPreviewBeat(beat);const a=preview.current;previewPlayReport.current={playbackId:id(),trackId:t.id,kind:'preview'};a.src=`/api/audio/${t.id}${beat?'?beat=1':''}`;a.load();if(follow&&snap.current){a.onloadedmetadata=()=>{a.currentTime=livePosition(snap.current!.event);a.onloadedmetadata=null;};}else a.onloadedmetadata=null;try{await a.play();}catch{setError('Tap play again to listen. If audio still fails, tell the artist.');}};
  const togglePreview=()=>{const a=preview.current;if(!a)return;if(a.paused)a.play().catch(()=>setError('This audio could not be played.'));else{a.pause();setLiveFollow(false);}};
  const connectSpeaker=async(force=false,trackId?:string)=>{setSpeakerError('');setBusy(true);try{
@@ -158,10 +165,10 @@ export default function YourMic({admin=false}:{admin?:boolean}){
   pendingResume.current?.clear();speakerEnabled.current=false;setSpeakerActive(false);speakerPlayer.current?.stop();const a=speaker.current;if(a){a.src='data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';try{await a.play();a.pause();}catch{}}
   if(!trackId&&snap.current?.speechAvailable&&snap.current.event.intro_enabled&&!snap.current.event.intro_played&&!snap.current.event.current_track&&!mc.special('intro'))await mc.prepare('intro');
   const s=await control('claim',{force,...resume});if(!s)return;preview.current?.pause();setSelected(null);setLiveFollow(false);
-  if((navigator as any).wakeLock)try{wakeLock.current=await (navigator as any).wakeLock.request('screen');}catch{}
+  if(navigator.wakeLock)try{wakeLock.current=await navigator.wakeLock.request('screen');}catch{}
   await control(trackId?'select':'play',trackId?{trackId}:{mcClipId:mc.special('intro')?.id});
   speakerEnabled.current=true;setSpeakerActive(true);
- }catch(err:any){setSpeakerError(err.message);}finally{setBusy(false);}};
+ }catch(caught_err){const err=caught_err as HttpError;setSpeakerError(err.message);}finally{setBusy(false);}};
  const selectSpeakerTrack=async(t:Track)=>{
   if(!controlsExpanded||trackChangeBusy.current)return;
   trackChangeBusy.current=true;setTrackChanging(true);setSpeakerError('');
@@ -171,11 +178,11 @@ export default function YourMic({admin=false}:{admin?:boolean}){
   try{
    if(!speakerEnabled.current){await connectSpeaker(false,t.id);return;}
    await control('select',{trackId:t.id});
-  }catch(err:any){setSpeakerError(err.message);await load();}
+  }catch(caught_err){const err=caught_err as HttpError;setSpeakerError(err.message);await load();}
   finally{trackChangeBusy.current=false;setTrackChanging(false);}
  };
- const resumeSpeaker=async()=>{setSpeakerError('');try{const p=speakerPlayer.current;if(!speakerActive||!p?.ready||p.ended||speaker.current?.error){await connectSpeaker();return;}const intent=resumeIntent();intent.begin(p.key);if(!p.resumeFromGesture()){intent.clear();await connectSpeaker();return;}await intent.confirm();}catch(err:any){setSpeakerError(err.message);}};
- const speakerToggle=async()=>{if(!speakerActive||snap.current?.event.status!=='playing'){await resumeSpeaker();return;}try{pendingResume.current?.clear();speaker.current?.pause();await control('pause');}catch(err:any){setSpeakerError(err.message);}};
+ const resumeSpeaker=async()=>{setSpeakerError('');try{const p=speakerPlayer.current;if(!speakerActive||!p?.ready||p.ended||speaker.current?.error){await connectSpeaker();return;}const intent=resumeIntent();intent.begin(p.key);if(!p.resumeFromGesture()){intent.clear();await connectSpeaker();return;}await intent.confirm();}catch(caught_err){const err=caught_err as HttpError;setSpeakerError(err.message);}};
+ const speakerToggle=async()=>{if(!speakerActive||snap.current?.event.status!=='playing'){await resumeSpeaker();return;}try{pendingResume.current?.clear();speaker.current?.pause();await control('pause');}catch(caught_err){const err=caught_err as HttpError;setSpeakerError(err.message);}};
 
  async function saveEvent(ev:React.FormEvent){ev.preventDefault();try{if(settings){await act('events/'+eventId,form,'PATCH');setSettings(false);notify('Event updated.');}else{const d=await act('events',form);setEvents(x=>[{id:d.id,...form},...x]);setCreate(false);chooseEvent(d.id);notify('Event created. Upload your set to get started.');}}catch{}}
  async function subscribe(ev:React.FormEvent){ev.preventDefault();try{await act('events/'+eventId+'/subscribe',{email,consent:true});setSubscribed(true);setSignup(false);localStorage.setItem('ym-subscribed-'+eventId,'yes');notify('You’re on the release list.');}catch{}}
@@ -185,10 +192,11 @@ export default function YourMic({admin=false}:{admin?:boolean}){
  function durationOf(file:File){return new Promise<number>(resolve=>{const a=document.createElement('audio');const url=URL.createObjectURL(file);const finish=(n:number)=>{URL.revokeObjectURL(url);a.removeAttribute('src');resolve(n);};const timeout=setTimeout(()=>finish(0),6000);a.onloadedmetadata=()=>{clearTimeout(timeout);finish(Number.isFinite(a.duration)?a.duration:0);};a.onerror=()=>{clearTimeout(timeout);finish(0);};a.src=url;});}
  async function uploadFiles(files:FileList|null,beat=false){if(!files?.length)return;setError('');setBusy(true);try{for(let i=0;i<files.length;i++){const f=files[i];if(f.size>75*1024*1024)throw new Error(`${f.name} exceeds 75 MB. Export a smaller MP3 or M4A.`);setProgress(`${beat?'Uploading beat':'Uploading track'} ${i+1} of ${files.length}: ${f.name}`);const duration=await durationOf(f);
   const path=`events/${eventId}/tracks${beat?'/'+beatFor.current+'/beat':''}?filename=${encodeURIComponent(f.name)}&title=${encodeURIComponent(f.name.replace(/\.[^.]+$/,''))}&duration=${duration}`;
-  const result=await request(path,{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream','X-Audio-Size':String(f.size)},body:f});accept(result);
- }notify(beat?'Freestyle beat added.':'Your tracks are ready.');}catch(err:any){setError(err.message);}finally{setProgress('');setBusy(false);if(upload.current)upload.current.value='';if(beatUpload.current)beatUpload.current.value='';}}
+  const result=await request(path,{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream','X-Audio-Size':String(f.size)},body:f});accept(result as Snapshot);
+ }notify(beat?'Freestyle beat added.':'Your tracks are ready.');}catch(caught_err){const err=caught_err as HttpError;setError(err.message);}finally{setProgress('');setBusy(false);if(upload.current)upload.current.value='';if(beatUpload.current)beatUpload.current.value='';}}
  const e=snapshot?.event,tracks=snapshot?.tracks||[],queue=snapshot?.queue||[],mine=queue.find(q=>q.mine),nowEntry=queue.find(q=>q.id===e?.current_entry),nowTrack=tracks.find(t=>t.id===e?.current_track),waiting=queue.filter(q=>q.status==='waiting');
  const myPosition=mine?waiting.findIndex(q=>q.id===mine.id)+1:0;const myTurn=!!mine&&e?.current_entry===mine.id;const totalDuration=tracks.reduce((n,t)=>n+t.duration,0);const micPending=e?.pending_mode==='mic'||!!e?.mic_after_track;
+ // eslint-disable-next-line react-hooks/refs -- the queue pass token lives in a ref; this render always follows the state change that set it
  let returnURL='';if(ready&&eventId&&guest.current)try{returnURL=privateQueueLink(window.location.origin,eventId,guest.current);}catch{}
  const savePass=async()=>{setPassDialog(true);try{await navigator.clipboard.writeText(returnURL);notify('Private queue pass copied. Keep it for yourself.');}catch{}};
  const eventURL=ready&&eventId?`${window.location.origin}/?event=${eventId}`:'';

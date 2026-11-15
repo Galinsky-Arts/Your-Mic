@@ -1,5 +1,6 @@
 import {MC_MODEL, MC_VOICE, MC_MILES_MODEL, type McPlan} from './mc';
 import {MILES_EXPRESSIVITY, MILES_VOICE_KEY, milesSpeechUrl} from './miles.mjs';
+import type {Row} from './types';
 
 type SpeechEnv = {DEEPGRAM_API_KEY?: string; DB?: D1Database; BUCKET?: R2Bucket; AI?: {run(model: string, input: Record<string, unknown>): Promise<ReadableStream>}; MC_CLOUDFLARE_ACCOUNT_ID?: string; MC_CLOUDFLARE_API_TOKEN?: string};
 export function speechAvailable(env: SpeechEnv) {
@@ -19,15 +20,15 @@ export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
   const profile = speechProfile(env);
   const id = await digest(JSON.stringify([eventId, profile.model, profile.voice, ...(profile.provider === 'deepgram' ? [profile.key] : []), plan.context, plan.text]));
   const db = env.DB!, bucket = env.BUCKET!;
-  const find = () => db.prepare('SELECT * FROM mc_clips WHERE id=? AND event_id=?').bind(id, eventId).first<any>();
+  const find = () => db.prepare('SELECT * FROM mc_clips WHERE id=? AND event_id=?').bind(id, eventId).first<Row>();
   let clip = await find();
   const response = (state: string, message = '') => ({id, voice: profile.label, context: plan.context, text: plan.text, state, message, audioUrl: state === 'ready' ? `/api/mc-audio/${id}` : null});
   if (clip?.state === 'ready') return response('ready');
   if (!speechAvailable(env)) return response('unavailable', 'The MC voice activates on Cloudflare. Music can still play here.');
   const now = Date.now();
-  if (clip?.lease_until > now) return response(clip.state === 'failed' ? 'failed' : 'generating', clip.state === 'failed' ? 'Speech is unavailable. The music will continue.' : '');
-  const count = await db.prepare('SELECT COUNT(*) AS n FROM mc_clips WHERE event_id=? AND created_at>?').bind(eventId, now - 60000).first<any>();
-  if (count.n >= 30) return response('generating', 'Preparing recent edits. The previous ready announcement stays in place.');
+  if (clip?.lease_until > now) return response(clip!.state === 'failed' ? 'failed' : 'generating', clip!.state === 'failed' ? 'Speech is unavailable. The music will continue.' : '');
+  const count = await db.prepare('SELECT COUNT(*) AS n FROM mc_clips WHERE event_id=? AND created_at>?').bind(eventId, now - 60000).first<Row>();
+  if (count!.n >= 30) return response('generating', 'Preparing recent edits. The previous ready announcement stays in place.');
   const lease = crypto.randomUUID();
   const claimed = await db.prepare("INSERT INTO mc_clips(id,event_id,context,text,state,lease,lease_until,created_at) VALUES(?,?,?,?,'generating',?,?,?) ON CONFLICT(id) DO UPDATE SET state='generating',lease=excluded.lease,lease_until=excluded.lease_until WHERE mc_clips.state!='ready' AND mc_clips.lease_until<=?")
     .bind(id, eventId, plan.context, plan.text, lease, now + 30000, now, now).run();

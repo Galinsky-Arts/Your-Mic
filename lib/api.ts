@@ -2,23 +2,24 @@ import { env } from 'cloudflare:workers';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import SVG from 'qrcode/lib/renderer/svg-tag.js';
 import {nextSelection,playbackPosition,parseRange} from './playback';
-import {mcPlan,mcSpecialPlan,mcTrackPlan,MC_TEXT_LIMIT} from './mc';
+import {mcPlan,mcSpecialPlan,mcTrackPlan,MC_TEXT_LIMIT,type McPlan} from './mc';
 import {prepareMc,speechAvailable,speechProfile} from './mc-storage';
+import type {HttpError,Row} from './types';
 const consent='Notify me by email when this album is available on streaming platforms.';
-const json=(v:any,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-const fail=(s:number,m:string,code?:string):never=>{throw Object.assign(new Error(m),{status:s,code});};
-const text=(v:any,max=120)=>String(v??'').trim().slice(0,max);
+const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+function fail(s:number,m:string,code?:string):never{throw Object.assign(new Error(m),{status:s,code});}
+const text=(v:unknown,max=120)=>String(v??'').trim().slice(0,max);
 async function hash(v:string){const a=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v));return Array.from(new Uint8Array(a),x=>x.toString(16).padStart(2,'0')).join('');}
 const db=()=>{if(!env.DB)fail(503,'Storage is not ready. Try again shortly.');return env.DB!;};
 const bucket=()=>{if(!env.BUCKET)fail(503,'Audio storage is not ready.');return env.BUCKET!;};
-async function first(sql:string,...p:any[]){return db().prepare(sql).bind(...p).first<any>();}
-async function all(sql:string,...p:any[]){return (await db().prepare(sql).bind(...p).all<any>()).results;}
-async function run(sql:string,...p:any[]){return db().prepare(sql).bind(...p).run();}
+async function first(sql:string,...p:unknown[]){return db().prepare(sql).bind(...p).first<Row>();}
+async function all(sql:string,...p:unknown[]){return (await db().prepare(sql).bind(...p).all<Row>()).results;}
+async function run(sql:string,...p:unknown[]){return db().prepare(sql).bind(...p).run();}
 function uid(r:Request){return r.headers.get('oai-authenticated-user-id');}
 function auth(r:Request){const id=uid(r);if(!id)fail(401,'Sign in as the artist to continue.');return id!;}
 async function eventFor(id:string,r?:Request){const e=await first('SELECT * FROM events WHERE id=?',id);if(!e)fail(404,'This event could not be found.');if(r&&e.owner_id!==auth(r))fail(403,'Only this event’s artist can change it.');return e;}
 function originCheck(r:Request){const o=r.headers.get('origin');if(o&&o!==new URL(r.url).origin)fail(403,'Please use this app directly.');if(r.headers.get('sec-fetch-site')==='cross-site')fail(403,'Please use this app directly.');}
-async function body(r:Request){if(Number(r.headers.get('content-length')||0)>16000)fail(413,'That request is too large.');try{return await r.json() as any;}catch{fail(400,'Please check the form and try again.');}}
+async function body(r:Request){if(Number(r.headers.get('content-length')||0)>16000)fail(413,'That request is too large.');try{return await r.json() as Row;}catch{fail(400,'Please check the form and try again.');}}
 async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Refresh the page to set up your queue pass.');return hash(token);}
 async function snapshot(id:string,r:Request){
   const e=await eventFor(id);const own=uid(r)===e.owner_id;
@@ -30,9 +31,9 @@ async function snapshot(id:string,r:Request){
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere};
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:Row)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere};
 }
-async function splitTransition(e:any,b:any,r:Request,now:number){
+async function splitTransition(e:Row,b:Row,r:Request,now:number){
   if(Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
   if(b.action==='finish-announcement'&&(!e.announcement_id||b.announcementId!==e.announcement_id))fail(409,'This announcement already changed.');
   // The opening already owns its selected track/rapper. Finishing it needs
@@ -43,8 +44,8 @@ async function splitTransition(e:any,b:any,r:Request,now:number){
   }
   const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',e.id);
   const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",e.id);
-  const clipFor=async(id:any,plan:any)=>id&&plan?first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",id,e.id,plan.context):null;
-  const opening=async(track:any,entry:any)=>await clipFor(b.openingClipId,mcTrackPlan(e,track,'track-start',entry))||await clipFor(b.genericOpeningClipId,mcTrackPlan(e,track,'track-start'))||await clipFor(b.trackOpeningClips?.[track?.id],mcTrackPlan(e,track,'track-start'));
+  const clipFor=async(id:unknown,plan:McPlan|null)=>id&&plan?first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",id,e.id,plan.context):null;
+  const opening=async(track:Row|null|undefined,entry:Row|null)=>await clipFor(b.openingClipId,mcTrackPlan(e,track,'track-start',entry))||await clipFor(b.genericOpeningClipId,mcTrackPlan(e,track,'track-start'))||await clipFor(b.trackOpeningClips?.[track?.id],mcTrackPlan(e,track,'track-start'));
   // The outgoing credit plays before selecting a successor. A last-second
   // queue arrival during this credit therefore takes priority at the next step.
   if(!e.announcement_id&&e.current_track&&['next','end'].includes(b.action)){
@@ -82,7 +83,7 @@ async function splitTransition(e:any,b:any,r:Request,now:number){
   const result=await db().batch(statements);if(!result[0].meta.changes)fail(409,'Playback changed. Refreshing the queue.');
   return json(await snapshot(e.id,r));
 }
-async function control(e:any,b:any,r:Request){
+async function control(e:Row,b:Row,r:Request){
   const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
   const ch=await hash(token);const now=Date.now();
   const reportedPosition=typeof b.position==='number'&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200&&typeof b.playbackId==='string'&&b.playbackId===e.playback_id?b.position:null;
@@ -154,7 +155,7 @@ export async function api(r:Request){try{
     if(method==='GET')return json({events:await all('SELECT id,title,artist,album,record_label,location,created_at,queue_open FROM events ORDER BY created_at DESC LIMIT 30')});
     if(method==='POST'){
       const owner=auth(r);const b=await body(r);if(!text(b.title)||!text(b.artist))fail(400,'Add an event name and artist.');
-      if((await first('SELECT COUNT(*) AS n FROM events WHERE owner_id=?',owner)).n>=50)fail(400,'You have reached the 50-event limit.');
+      if((await first('SELECT COUNT(*) AS n FROM events WHERE owner_id=?',owner))!.n>=50)fail(400,'You have reached the 50-event limit.');
       const id=crypto.randomUUID();await run('INSERT INTO events(id,owner_id,title,artist,album,record_label,location,created_at) VALUES(?,?,?,?,?,?,?,?)',id,owner,text(b.title),text(b.artist),text(b.album),text(b.recordLabel),text(b.location),Date.now());return json({id},201);
     }
   }
@@ -203,7 +204,7 @@ export async function api(r:Request){try{
   }
   if(p[2]==='subscribe'&&method==='POST'){
     await eventFor(id);const b=await body(r);const email=text(b.email,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||b.consent!==true)fail(400,'Enter a valid email and agree to the release notification.');
-    if((await first('SELECT COUNT(*) AS n FROM subscribers WHERE event_id=?',id)).n>=15000)fail(429,'This list is full. Please ask the artist.');
+    if((await first('SELECT COUNT(*) AS n FROM subscribers WHERE event_id=?',id))!.n>=15000)fail(429,'This list is full. Please ask the artist.');
     await run('INSERT OR IGNORE INTO subscribers(id,event_id,email,created_at,consent) VALUES(?,?,?,?,?)',crypto.randomUUID(),id,email,Date.now(),consent);return json({ok:true});
   }
   if(p[2]==='queue'&&method==='POST'){
@@ -270,14 +271,14 @@ export async function api(r:Request){try{
   if(p[2]==='subscribers'&&method==='GET'){
     const rows=await all('SELECT email,created_at,consent FROM subscribers WHERE event_id=? ORDER BY created_at',id);
     if(u.searchParams.get('format')!=='csv')return json({count:rows.length});
-    const cell=(v:any)=>'"'+(/^[=+\-@\t\r]/.test(String(v))?"'"+String(v):String(v)).replace(/"/g,'""')+'"';
+    const cell=(v:unknown)=>'"'+(/^[=+\-@\t\r]/.test(String(v))?"'"+String(v):String(v)).replace(/"/g,'""')+'"';
     const csv='Email,Signed up (UTC),Consent\r\n'+rows.map(x=>[x.email,new Date(x.created_at).toISOString(),x.consent].map(cell).join(',')).join('\r\n');
     return new Response(csv,{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="your-mic-release-list.csv"','Cache-Control':'no-store'}});
   }
   if(p[2]==='tracks'&&method==='POST'){
     const beat=p[3]&&p[4]==='beat';const existing=beat?await first('SELECT * FROM tracks WHERE id=? AND event_id=?',p[3],id):null;
     if(beat&&!existing)fail(404,'Track not found.');
-    if((await first('SELECT COUNT(*) AS n FROM tracks WHERE event_id=?',id)).n>=100&&!beat)fail(400,'An event can contain up to 100 tracks.');
+    if((await first('SELECT COUNT(*) AS n FROM tracks WHERE event_id=?',id))!.n>=100&&!beat)fail(400,'An event can contain up to 100 tracks.');
     const size=Number(r.headers.get('x-audio-size')||r.headers.get('content-length')||0);if(!Number.isSafeInteger(size)||size<=0)fail(400,'The upload size is missing. Refresh and try again.');if(size>75*1024*1024)fail(413,'Use an audio file smaller than 75 MB. MP3 or M4A is best for an outdoor event.');
     const filename=text(u.searchParams.get('filename'),200);const ext=filename.split('.').pop()?.toLowerCase()||'';
     const types:Record<string,string>={mp3:'audio/mpeg',m4a:'audio/mp4',mp4:'audio/mp4',wav:'audio/wav',ogg:'audio/ogg',aac:'audio/aac',flac:'audio/flac',webm:'audio/webm'};
@@ -286,7 +287,7 @@ export async function api(r:Request){try{
     const fixed=new FixedLengthStream(size);
     await Promise.all([bucket().put(key,fixed.readable,{httpMetadata:{contentType:types[ext]}}),r.body!.pipeTo(fixed.writable)]);
     try{
-      if(beat){await run('UPDATE tracks SET beat_key=?,beat_mime=?,beat_duration=? WHERE id=? AND event_id=?',key,types[ext],duration,existing.id,id);if(existing.beat_key)await bucket().delete(existing.beat_key);}
+      if(beat){await run('UPDATE tracks SET beat_key=?,beat_mime=?,beat_duration=? WHERE id=? AND event_id=?',key,types[ext],duration,existing!.id,id);if(existing!.beat_key)await bucket().delete(existing!.beat_key);}
       else{const tid=crypto.randomUUID();await run('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) SELECT ?,?,?,COALESCE(MAX(position),-1)+1,?,?,? FROM tracks WHERE event_id=?',tid,id,text(u.searchParams.get('title'))||filename.replace(/\.[^.]+$/,''),duration,key,types[ext],id);}
     }catch(err){await bucket().delete(key);throw err;}
     return json(await snapshot(id,r),201);
@@ -312,5 +313,5 @@ export async function api(r:Request){try{
     await bucket().delete([t.audio_key,...(t.beat_key?[t.beat_key]:[])]);return json(await snapshot(id,r));
   }
   fail(404,'Not found.');
-}catch(error:any){if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.',...(error.code?{code:error.code}:{})},error.status||500);}}
+}catch(caught_error){const error=caught_error as HttpError;if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.',...(error.code?{code:error.code}:{})},error.status||500);}}
 

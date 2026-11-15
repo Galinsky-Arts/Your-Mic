@@ -1,4 +1,5 @@
-export function nextSelection(event: any, tracks: any[], queue: any[]) {
+import type {Row} from './types';
+export function nextSelection<T extends Row, Q extends Row>(event: Row, tracks: T[], queue: Q[]): {mode: string; entry: Q | null; track: T | null; cursor: string} {
   const scheduled = event.mic_after_track && event.current_track === event.mic_after_track;
   const mode = event.pending_mode || (scheduled ? 'mic' : event.mode);
   if (mode === 'mic' || (mode === 'auto' && queue.some(q=>q.status==='waiting'))) {
@@ -9,7 +10,7 @@ export function nextSelection(event: any, tracks: any[], queue: any[]) {
   const track = tracks.length ? tracks[(index+1)%tracks.length] : null;
   return {mode, entry:null, track, cursor:track?.id||event.album_cursor};
 }
-export function playbackPosition(event:any, now=Date.now()) {
+export function playbackPosition(event:Row, now=Date.now()) {
   return Math.max(0,(event.position||0)+(event.status==='playing'&&event.started_at ? (now-event.started_at)/1000 : 0));
 }
 export function parseRange(header:string|null,size:number) {
