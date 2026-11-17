@@ -65,10 +65,10 @@ export async function standaloneFetch(request: Request, env: Cloudflare.Env, fal
     const window = Math.floor(Date.now()/900000);
     const ip = request.headers.get('cf-connecting-ip') || 'unknown';
     const fingerprint = await sign(`login:${ip}`,env.SESSION_SECRET!);
-    const attempt = await env.DB!.prepare('INSERT INTO artist_login_attempts(fingerprint,window,attempts) VALUES(?,?,1) ON CONFLICT(fingerprint) DO UPDATE SET window=excluded.window,attempts=CASE WHEN artist_login_attempts.window=excluded.window THEN artist_login_attempts.attempts+1 ELSE 1 END WHERE artist_login_attempts.window<>excluded.window OR artist_login_attempts.attempts<20').bind(fingerprint,window).run();
+    const attempt = await env.DB!.prepare('INSERT INTO artist_login_attempts(fingerprint,"window",attempts) VALUES(?,?,1) ON CONFLICT(fingerprint) DO UPDATE SET "window"=excluded."window",attempts=CASE WHEN artist_login_attempts."window"=excluded."window" THEN artist_login_attempts.attempts+1 ELSE 1 END WHERE artist_login_attempts."window"<>excluded."window" OR artist_login_attempts.attempts<20').bind(fingerprint,window).run();
     if (!attempt.meta.changes) return response(page('Too many sign-in attempts. Wait 15 minutes and try again.'),429,{'Retry-After':'900'});
     // Keep the abuse table bounded over time; never store raw IP addresses.
-    if (Math.random()<0.05) await env.DB!.prepare('DELETE FROM artist_login_attempts WHERE window<?').bind(window-96).run();
+    if (Math.random()<0.05) await env.DB!.prepare('DELETE FROM artist_login_attempts WHERE "window"<?').bind(window-96).run();
     const input = new URLSearchParams(raw).get('password') || '';
     if (!await passwordMatches(input,env.ARTIST_PASSWORD!)) return response(page('That password did not match.'),401);
     const payload = encode(encoder.encode(JSON.stringify({artist:'standalone-artist',exp:Math.floor(Date.now()/1000)+lifetime})));

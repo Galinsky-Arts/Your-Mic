@@ -1,6 +1,6 @@
 # Your Mic deployment
 
-Recommended starting point: **Cloudflare Workers Paid + D1 + R2 Standard**, directly in your own Cloudflare account. The source already uses these runtimes and storage APIs. No Render service, separate Postgres server, Redis, music-generation API, or paid email service is needed for the live queue and playback. The AI MC uses Cloudflare Workers AI and caches generated speech in R2.
+Recommended host for real shows: **Cloudflare Workers Paid + D1 + R2 Standard**, directly in your own Cloudflare account. The source already uses these runtimes and storage APIs. A free [Render + Neon deployment](#render-free--neon-free-node-runtime) is also supported for rehearsals and small shows. On Cloudflare no separate Postgres server, Redis, music-generation API, or paid email service is needed for the live queue and playback. The AI MC uses Cloudflare Workers AI and caches generated speech in R2.
 
 ## Budget and audience
 
@@ -117,11 +117,70 @@ Provider documentation: [Aura-2 model and pricing](https://developers.cloudflare
 - Watch Worker errors, CPU time, D1 latency and request counts during the rehearsal and first event. The configured 100 ms per-invocation CPU ceiling is not a monthly spending cap. D1 and R2 retain their own service limits.
 - Use D1 Time Travel/backups and keep original audio files. Before a migration, export the database with Wrangler and retain the export securely outside the public repository.
 
-## Render comparison
+## Render free + Neon free (Node runtime)
 
-Render's smallest paid web compute plan is **$7/month**, with 512 MB RAM and 0.5 CPU. Managed Postgres starts at **$6/month**, so a web service plus that database starts around **$13/month**, before storage and bandwidth. Its Hobby workspace currently includes 5 GB outbound bandwidth; public internet overage is $0.15/GB, shared across workspace services.
+The same source also runs as a plain Node server with PostgreSQL. This is the
+current hosted deployment while the Cloudflare account is not set up.
 
-Render could host an adapted Node version, with audio served directly from R2 and a durable database. **The current application is not a drop-in Render deployment:** it imports `cloudflare:workers` and uses D1, R2 and Worker streaming APIs. It needs a real Node/runtime/storage adapter before Render deployment. Running the Wrangler development server on Render is not the proposed production architecture. Because Cloudflare already matches the app and avoids an additional running server/database bill, it is the recommended first deployment.
+**Suitability.** Render's free web service (512 MB RAM, shared CPU) sleeps after
+about 15 minutes without traffic and takes up to about a minute to wake, and
+Neon's free plan has 0.5 GB of storage and a small autoscaling compute. That is
+fine for **rehearsals and small shows** (one album of audio, tens of people).
+For big shows (hundreds of open pages, heavy listen-along audio) **Cloudflare
+Workers Paid + D1 + R2 remains the recommended host**: it does not sleep, scales
+per request and serves audio without egress charges. Open the event page a few
+minutes before doors so the free service is awake, and keep a tab polling.
+
+How it works:
+
+- `pnpm build:node` builds the vinext app with `vite.node.config.ts`, which maps
+  `cloudflare:workers` to `lib/node-runtime.ts`, and bundles `server/node.ts` to
+  `dist-node/server.mjs`. `pnpm start:node` starts it. The Cloudflare build and
+  `worker/standalone.ts` are unchanged.
+- `lib/d1-postgres.ts` gives PostgreSQL the D1 call shape: `?` placeholders,
+  `first/all/run`, `batch()` as one transaction, and D1's `meta.changes`, which
+  the version/lease compare-and-swap checks depend on. Writes are serialized
+  with a transaction advisory lock, matching D1's single writer.
+- Audio and MC clips are stored in PostgreSQL in 1 MiB `bytea` chunks
+  (`lib/pg-bucket.ts`), with byte-range reads. The 75 MB per-file limit is
+  unchanged. Neon free's 0.5 GB holds about one album; delete old events'
+  tracks to reclaim space.
+- `drizzle-postgres/` holds the PostgreSQL versions of the seven SQLite
+  migrations plus the storage tables. The server applies pending migrations at
+  boot in one transaction (set `YOUR_MIC_MIGRATE=0` to skip). Application SQL is
+  written in the dialect both engines accept (`ON CONFLICT DO NOTHING`, quoted
+  `"window"` and camelCase aliases, `IS DISTINCT FROM`, `CAST(? AS TEXT)`).
+- Artist sign-in, cookies, forged-header removal and the login rate limit are
+  the same `lib/standalone.ts` code as on Cloudflare (client IP comes from
+  Render's `X-Forwarded-For`).
+
+Render service settings (free plan, Node, region Virginia, auto-deploy from `main`):
+
+| Setting | Value |
+| --- | --- |
+| Build command | `corepack enable && pnpm install --frozen-lockfile && pnpm run build:node` |
+| Start command | `pnpm run start:node` |
+| Health check path | `/healthz` |
+| `DATABASE_URL` | Neon pooled connection string (project `your-mic`) |
+| `ARTIST_PASSWORD` | artist studio password, at least 16 characters (sign in at `/artist/sign-in`) |
+| `SESSION_SECRET` | at least 32 random characters |
+| `DEEPGRAM_API_KEY` | optional; **off until set**. Turns on the Miles MC voice. Without it the studio shows "MC voice is off" and music plays normally |
+| `YOUR_MIC_RUNTIME` | `node` (informational) |
+| `NODE_VERSION` | `22` |
+
+Workers AI (the "Zeus" voice) is Cloudflare-only; on Node the MC voice needs
+`DEEPGRAM_API_KEY` (or `MC_CLOUDFLARE_ACCOUNT_ID` + `MC_CLOUDFLARE_API_TOKEN`
+for the Workers AI REST API).
+
+Local verification of the Node runtime needs a PostgreSQL server:
+
+```sh
+YM_TEST_PG_URL=postgres://postgres@127.0.0.1:5432/postgres pnpm test:pg   # all API/MC/auth suites on PostgreSQL
+pnpm build:node && YM_TEST_PG_URL=... pnpm smoke:node                     # real Node server over HTTP
+```
+
+CI runs both against a PostgreSQL 17 service container, after the Cloudflare
+build and smoke test.
 
 ## Continue developing in Sites
 

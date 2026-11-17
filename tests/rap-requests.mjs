@@ -1,14 +1,9 @@
-import {createRequire} from 'node:module';
-import {readFile,readdir} from 'node:fs/promises';
+import {createHarness} from './harness.mjs';
 import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
-const require=createRequire(import.meta.url),wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
-const {Miniflare}=wranglerRequire('miniflare'),{build}=wranglerRequire('esbuild');
-const built=await build({stdin:{contents:"import {api} from './lib/api.ts';export default {fetch:api};",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET']});
+const mf=await createHarness();
 try{
- const DB=await mf.getD1Database('DB'),BUCKET=await mf.getR2Bucket('BUCKET');
- for(const file of(await readdir('drizzle')).filter(f=>f.endsWith('.sql')).sort())for(const sql of(await readFile('drizzle/'+file,'utf8')).split('--> statement-breakpoint'))if(sql.trim())await DB.prepare(sql).run();
+ const {DB,BUCKET}=mf;
  const owner={'oai-authenticated-user-id':'artist'},controller=randomUUID(),host={...owner,'x-controller-token':controller},guest=()=>({'x-guest-token':randomUUID()});
  async function req(path,method='GET',body,headers=host,status=200){const r=await mf.dispatchFetch('https://requests.test/api/'+path,{method,headers:{'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});const d=await r.json();assert.equal(r.status,status,JSON.stringify(d));return d;}
  const created=await req('events','POST',{title:'Sides A and B',artist:'Artist'},host,201),base='events/'+created.id,a=randomUUID(),b=randomUUID();

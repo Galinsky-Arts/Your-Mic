@@ -4,6 +4,14 @@ A live album release playlist and first-come freestyle queue. Audience members n
 
 The existing Sites deployment uses ChatGPT artist sign-in. Independent Cloudflare hosting has its own password-protected artist studio, signed secure sessions, D1 database and R2 audio storage. See [deployment instructions, hosting costs and capacity assumptions](DEPLOYMENT.md). The recommended starting plan is Cloudflare Workers Paid at $5/month plus any metered overages. The app is prepared for a 300-person audience and accepts up to 500 queued performers; hosted capacity still needs a rehearsal.
 
+## Status
+
+- **Live (free tier):** Render web service `your-mic` + Neon PostgreSQL project `your-mic`, auto-deployed from `main`. Suitable for rehearsals and small shows; it sleeps when idle. See [Render free + Neon free](DEPLOYMENT.md#render-free--neon-free-node-runtime).
+- **Recommended for big shows:** Cloudflare Workers Paid + D1 + R2. Ready to deploy (`pnpm cloudflare:launch` or the manual GitHub workflow) once the owner's paid Cloudflare account and secrets exist; not deployed yet.
+- **MC voice:** off on Render until `DEEPGRAM_API_KEY` is set.
+- **Offline/local show audio:** still on `development/local-show-audio`; it no longer rebases cleanly onto `main` and has not been merged.
+- No hardware/venue rehearsal has been recorded for either host.
+
 ## Run an event
 
 1. Open `/admin`, sign in, and create an event.
@@ -45,6 +53,8 @@ node --experimental-strip-types tests/standalone.mjs
 node --experimental-strip-types --test tests/queue-pass.mjs tests/cloudflare-resources.mjs
 node --experimental-strip-types tests/load.mjs
 ```
+
+For the Node + PostgreSQL runtime (Render/Neon), `pnpm test:pg` runs the same API, standalone-auth and MC suites against PostgreSQL (`YM_TEST_PG_URL`), and `pnpm build:node && pnpm smoke:node` checks the real Node server.
 
 The integration suite runs the real API in an isolated Miniflare Worker with temporary D1 and R2. It covers event ownership, audio and beat uploads, seeking, QR generation, consent and subscriber export access, anonymous FIFO queueing, duplicate protection, all modes, mode boundaries, playlist resumption/repeat, completed turns, controller leases, stale advances and track ordering. Test data is never deployed.
 

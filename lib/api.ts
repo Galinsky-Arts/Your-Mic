@@ -24,12 +24,12 @@ async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';i
 async function snapshot(id:string,r:Request){
   const e=await eventFor(id);const own=uid(r)===e.owner_id;
   const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
-  const tracks=await all(`SELECT id,title,position,duration,beat_duration,rap_allowed AS rapAllowed,beat_key IS NOT NULL AS hasBeat${own?',mc_text,mc_intro_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
+  const tracks=await all(`SELECT id,title,position,duration,beat_duration,rap_allowed AS "rapAllowed",beat_key IS NOT NULL AS "hasBeat"${own?',mc_text,mc_intro_text,audio_key AS "audioRevision",beat_key AS "beatRevision"':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
   const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
   const {owner_id,controller_hash,intro_text,outro_text,...event}=e;
   if(own)Object.assign(event,{intro_text,outro_text});
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
-  const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
+  const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS \"trackTitle\" FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
   return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:Row)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere};
 }
@@ -76,9 +76,9 @@ async function splitTransition(e:Row,b:Row,r:Request,now:number){
   const specialClip=await clipFor(ending?b.outroClipId:b.introClipId,special);
   const clip=specialClip||(!ending?await opening(pick.track,pick.entry):null);
   const kind=specialClip?special!.kind:clip?'track-start':null,newVersion=e.version+1;
-  const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (? IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,kind,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
+  const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (CAST(? AS TEXT) IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,kind,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
   const statements=[update];
-  if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS NOT ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
+  if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS DISTINCT FROM ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
   if(pick.entry)statements.push(db().prepare('UPDATE entries SET status=\'playing\' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry=?)').bind(pick.entry.id,e.id,newVersion,pick.entry.id));
   const result=await db().batch(statements);if(!result[0].meta.changes)fail(409,'Playback changed. Refreshing the queue.');
   return json(await snapshot(e.id,r));
@@ -139,9 +139,9 @@ async function control(e:Row,b:Row,r:Request){
     const plan=ending?(e.outro_enabled?mcSpecialPlan(e,'outro'):null):starting?(e.intro_enabled?mcSpecialPlan(e,'intro'):null):b.action==='next'?mcPlan(e,ts,pick):null;
     const clip=b.mcClipId&&plan?await first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",b.mcClipId,e.id,plan.context):null;
     const newVersion=e.version+1;
-    const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (? IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,clip?plan!.kind:null,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
+    const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (CAST(? AS TEXT) IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,clip?plan!.kind:null,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
     const statements=[update];
-    if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS NOT ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
+    if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS DISTINCT FROM ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
     if(pick.entry)statements.push(db().prepare("UPDATE entries SET status='playing' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry=?)").bind(pick.entry.id,e.id,newVersion,pick.entry.id));
     const result=await db().batch(statements);if(!result[0].meta.changes)fail(409,'Playback changed. Refreshing the queue.');
   }
@@ -185,7 +185,7 @@ export async function api(r:Request){try{
   if(p[2]==='plays'&&p.length===3&&['GET','POST'].includes(method)){
     if(method==='GET'){
       await eventFor(id,r);
-      const tracks=await all("SELECT t.id,t.title,SUM(CASE WHEN p.kind IN ('live','rap') THEN 1 ELSE 0 END) AS livePlays,SUM(CASE WHEN p.kind='rap' THEN 1 ELSE 0 END) AS rapPlays,SUM(CASE WHEN p.kind='preview' THEN 1 ELSE 0 END) AS privatePlays FROM tracks t LEFT JOIN track_plays p ON p.track_id=t.id AND p.event_id=t.event_id WHERE t.event_id=? GROUP BY t.id ORDER BY t.position,t.id",id);
+      const tracks=await all("SELECT t.id,t.title,SUM(CASE WHEN p.kind IN ('live','rap') THEN 1 ELSE 0 END) AS \"livePlays\",SUM(CASE WHEN p.kind='rap' THEN 1 ELSE 0 END) AS \"rapPlays\",SUM(CASE WHEN p.kind='preview' THEN 1 ELSE 0 END) AS \"privatePlays\" FROM tracks t LEFT JOIN track_plays p ON p.track_id=t.id AND p.event_id=t.event_id WHERE t.event_id=? GROUP BY t.id ORDER BY t.position,t.id",id);
       return json({tracks,totalLivePlays:tracks.reduce((sum,t)=>sum+Number(t.livePlays),0),totalRapPlays:tracks.reduce((sum,t)=>sum+Number(t.rapPlays),0),totalPrivatePlays:tracks.reduce((sum,t)=>sum+Number(t.privatePlays),0)});
     }
     const b=await body(r),uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -194,7 +194,7 @@ export async function api(r:Request){try{
     if(!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Track not found.');
     // Accept delayed reports; retries must survive a changed song or lease.
     // This isolated write never changes transport, queue, clock or speaker state.
-    await run('INSERT OR IGNORE INTO track_plays(event_id,playback_id,track_id,kind,played_at) VALUES(?,?,?,?,?)',id,b.playbackId,b.trackId,b.kind,Date.now());
+    await run('INSERT INTO track_plays(event_id,playback_id,track_id,kind,played_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING',id,b.playbackId,b.trackId,b.kind,Date.now());
     return json({ok:true});
   }
   if(p[2]==='qr'&&method==='GET'){
@@ -205,7 +205,7 @@ export async function api(r:Request){try{
   if(p[2]==='subscribe'&&method==='POST'){
     await eventFor(id);const b=await body(r);const email=text(b.email,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||b.consent!==true)fail(400,'Enter a valid email and agree to the release notification.');
     if((await first('SELECT COUNT(*) AS n FROM subscribers WHERE event_id=?',id))!.n>=15000)fail(429,'This list is full. Please ask the artist.');
-    await run('INSERT OR IGNORE INTO subscribers(id,event_id,email,created_at,consent) VALUES(?,?,?,?,?)',crypto.randomUUID(),id,email,Date.now(),consent);return json({ok:true});
+    await run('INSERT INTO subscribers(id,event_id,email,created_at,consent) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING',crypto.randomUUID(),id,email,Date.now(),consent);return json({ok:true});
   }
   if(p[2]==='queue'&&method==='POST'){
     const e=await eventFor(id);if(!e.queue_open)fail(400,'The artist has closed the freestyle queue.');

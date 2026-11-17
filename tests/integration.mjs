@@ -1,17 +1,11 @@
-import {createRequire} from 'node:module';
-const require=createRequire(import.meta.url);
-const wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
-const {Miniflare}=wranglerRequire('miniflare');
-const {build}=wranglerRequire('esbuild');
-import {readFile,readdir,mkdir} from 'node:fs/promises';
+import {createHarness} from './harness.mjs';
+import {mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 await mkdir('work',{recursive:true});
-const built=await build({stdin:{contents:"import {api} from './lib/api.ts';export default {fetch:api};",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET']});
+const mf=await createHarness();
 try{
- const DB=await mf.getD1Database('DB'),BUCKET=await mf.getR2Bucket('BUCKET');
- for(const filename of (await readdir('drizzle')).filter(n=>n.endsWith('.sql')).sort())for(const sql of (await readFile('drizzle/'+filename,'utf8')).split('--> statement-breakpoint'))if(sql.trim())await DB.prepare(sql).run();
+ const {DB,BUCKET}=mf;
  const owner={'oai-authenticated-user-id':'artist-one','oai-authenticated-user-email':'artist@example.test'};
  const guest={'x-guest-token':randomUUID()};const guest2={'x-guest-token':randomUUID()};const controller=randomUUID();const host={...owner,...guest,'x-controller-token':controller};
  async function req(path,method='GET',body,headers={},status=200){const r=new Request('https://your-mic.test/api/'+path,{method,headers:{...(body instanceof Uint8Array?{'X-Audio-Size':String(body.byteLength)}:{'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:body instanceof Uint8Array?body:JSON.stringify(body)})});const response=await mf.dispatchFetch(r.url,r);let d;if((response.headers.get('content-type')||'').includes('json'))d=await response.json();else d=await response.arrayBuffer();assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(d)}`);return d;}

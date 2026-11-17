@@ -24,7 +24,7 @@ export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
   let clip = await find();
   const response = (state: string, message = '') => ({id, voice: profile.label, context: plan.context, text: plan.text, state, message, audioUrl: state === 'ready' ? `/api/mc-audio/${id}` : null});
   if (clip?.state === 'ready') return response('ready');
-  if (!speechAvailable(env)) return response('unavailable', 'The MC voice activates on Cloudflare. Music can still play here.');
+  if (!speechAvailable(env)) return response('unavailable', 'The MC voice is off. The host can set DEEPGRAM_API_KEY (or deploy on Cloudflare) to turn it on. Music can still play here.');
   const now = Date.now();
   if (clip?.lease_until > now) return response(clip!.state === 'failed' ? 'failed' : 'generating', clip!.state === 'failed' ? 'Speech is unavailable. The music will continue.' : '');
   const count = await db.prepare('SELECT COUNT(*) AS n FROM mc_clips WHERE event_id=? AND created_at>?').bind(eventId, now - 60000).first<Row>();

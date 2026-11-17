@@ -39,7 +39,7 @@ export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: Sn
         if (number !== editNumber.current) return;
         accept(result as Snapshot);setSaveState(result.speechAvailable ? 'Saved. Preparing voice…' : 'Saved');
         const prepared = await mc.prepare(special ? selection : part === 'start' ? 'track-start' : 'track-end', special ? undefined : trackId, true);
-        if (number === editNumber.current) setSaveState(!result.speechAvailable ? 'Saved · Voice activates on Cloudflare' : prepared ? 'Saved · Recording ready' : 'Saved · Previous ready recording stays in place');
+        if (number === editNumber.current) setSaveState(!result.speechAvailable ? 'Saved · Voice is off (set DEEPGRAM_API_KEY)' : prepared ? 'Saved · Recording ready' : 'Saved · Previous ready recording stays in place');
       } catch(caught_error){const error=caught_error as HttpError;if (number === editNumber.current) setSaveState(error.message || 'Could not save. Try again.');}
     }, 650);
     return () => clearTimeout(timer);
@@ -63,7 +63,7 @@ export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: Sn
       <label><input type="checkbox" checked={!!event.intro_enabled} onChange={e => saveSettings({introEnabled: e.target.checked})}/> Opening announcement when starting</label>
       <label><input type="checkbox" checked={!!event.outro_enabled} onChange={e => saveSettings({outroEnabled: e.target.checked})}/> Closing announcement when ending</label>
     </div>
-    {!snapshot.speechAvailable && <p className="mc-description">Voice activates on the Cloudflare deployment. You can edit and save scripts here; this host has no speech connection.</p>}
+    {!snapshot.speechAvailable && <p className="mc-description">The MC voice is off on this host. To turn it on, the host sets the DEEPGRAM_API_KEY environment variable (Render) or deploys on Cloudflare. You can edit and save scripts now.</p>}
     <label className="mc-label" htmlFor="mc-script">Edit announcement</label>
     <select id="mc-script" value={selection} onChange={e => setSelected(e.target.value)}>
       <option value="intro">Opening announcement (optional)</option>

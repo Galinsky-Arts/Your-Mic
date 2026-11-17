@@ -1,14 +1,10 @@
-import {createRequire} from 'node:module';
-import {readFile,readdir} from 'node:fs/promises';
+import {createHarness} from './harness.mjs';
 import {randomUUID,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-const require=createRequire(import.meta.url),wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
-const {Miniflare}=wranglerRequire('miniflare'),{build}=wranglerRequire('esbuild');
 const apiSource=process.env.YM_TEST_API_SOURCE||'./lib/api.ts';
-const built=await build({stdin:{contents:`import {api} from ${JSON.stringify(apiSource)};export default {fetch:api};`,resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET']});
+const mf=await createHarness({contents:`import {api} from ${JSON.stringify(apiSource)};export default {fetch:api};`});
 try{
- const DB=await mf.getD1Database('DB');for(const f of(await readdir('drizzle')).filter(f=>f.endsWith('.sql')).sort())for(const sql of(await readFile('drizzle/'+f,'utf8')).split('--> statement-breakpoint'))if(sql.trim())await DB.prepare(sql).run();
+ const {DB}=mf;
  const owner={'oai-authenticated-user-id':'lease-test-artist'},controller=randomUUID(),other=randomUUID();
  async function req(path,body){const r=await mf.dispatchFetch('https://your-mic.test/api/'+path,{method:body?'POST':'GET',headers:{...owner,'Content-Type':'application/json','x-controller-token':controller},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,data:await r.json()};}
  const made=await req('events',{title:'Lease stress',artist:'Artist'}),eventId=made.data.id,trackId=randomUUID(),base='events/'+eventId;

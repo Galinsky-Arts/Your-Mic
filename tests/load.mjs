@@ -1,20 +1,16 @@
+import {createHarness,backend} from './harness.mjs';
 // Local correctness/concurrency simulation. This does not certify hosted latency,
 // provider capacity, mobile networks, or browser audio behavior.
-import {createRequire} from 'node:module';
-import {readFile,readdir,mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-const require=createRequire(import.meta.url),wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
-const {Miniflare}=wranglerRequire('miniflare'),{build}=wranglerRequire('esbuild');
-const built=await build({stdin:{contents:"import {api} from './lib/api.ts';export default {fetch:api};",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET']});
+const mf=await createHarness();
 try{
- const DB=await mf.getD1Database('DB');
- for(const filename of (await readdir('drizzle')).filter(n=>n.endsWith('.sql')).sort())for(const sql of (await readFile('drizzle/'+filename,'utf8')).split('--> statement-breakpoint'))if(sql.trim())await DB.prepare(sql).run();
+ const {DB}=mf;
  const event=randomUUID(),track=randomUUID(),now=Date.now();
  await DB.prepare('INSERT INTO events(id,owner_id,title,artist,created_at) VALUES(?,?,?,?,?)').bind(event,'load-artist','Local load test','Load Artist',now).run();
  await DB.prepare('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) VALUES(?,?,?,0,180,?,?)').bind(track,event,'Test instrumental','load.mp3','audio/mpeg').run();
- await (await mf.getR2Bucket('BUCKET')).put('load.mp3',new Uint8Array(1024));
+ await mf.BUCKET.put('load.mp3',new Uint8Array(1024));
  const guests=Array.from({length:300},()=>randomUUID());
  const times=[];let requests=0;const started=performance.now();
  async function req(path,options={}){
@@ -43,6 +39,6 @@ try{
  const final=(await req(`events/${event}`)).data;assert.equal(final.event.current_entry,first);assert.equal(final.queue.filter(q=>q.status==='playing').length,1);
  const range=await mf.dispatchFetch(`https://load.test/api/audio/${track}`,{headers:{Range:'bytes=100-199'}});assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,100);
  times.sort((a,b)=>a-b);
- const report={environment:'Local Miniflare, isolated temporary D1/R2; not a hosted capacity guarantee',clients:300,snapshotWaves:10,requests,elapsedSeconds:Number(((performance.now()-started)/1000).toFixed(2)),p50Ms:Math.round(times[Math.floor(times.length*0.5)]),p95Ms:Math.round(times[Math.floor(times.length*0.95)]),concurrencyCorrectness:'300 distinct entries, no duplicates, one winner for 20 simultaneous advances, range audio passed'};
+ const report={environment:backend==='pg'?'Local Node + PostgreSQL (Render/Neon runtime), isolated temporary database; not a hosted capacity guarantee':'Local Miniflare, isolated temporary D1/R2; not a hosted capacity guarantee',clients:300,snapshotWaves:10,requests,elapsedSeconds:Number(((performance.now()-started)/1000).toFixed(2)),p50Ms:Math.round(times[Math.floor(times.length*0.5)]),p95Ms:Math.round(times[Math.floor(times.length*0.95)]),concurrencyCorrectness:'300 distinct entries, no duplicates, one winner for 20 simultaneous advances, range audio passed'};
  await mkdir('work',{recursive:true});await writeFile('work/load-result.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
 }finally{await mf.dispose();}

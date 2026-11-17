@@ -1,15 +1,10 @@
-import {createRequire} from 'node:module';
-import {readFile,readdir} from 'node:fs/promises';
+import {createHarness} from './harness.mjs';
 import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {mcTrackPlan} from '../lib/mc.ts';
-const require=createRequire(import.meta.url), wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
-const {Miniflare}=wranglerRequire('miniflare'),{build}=wranglerRequire('esbuild');
-const built=await build({stdin:{contents:"import {api} from './lib/api.ts';export default {fetch:api};",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:{DEEPGRAM_API_KEY:'test-only-key'},outboundService:async()=>new Response(new Uint8Array(1600),{headers:{'Content-Type':'audio/mpeg'}})});
+const mf=await createHarness({bindings:{DEEPGRAM_API_KEY:'test-only-key'},outboundService:async()=>new Response(new Uint8Array(1600),{headers:{'Content-Type':'audio/mpeg'}})});
 try{
- const DB=await mf.getD1Database('DB');
- for(const file of(await readdir('drizzle')).filter(n=>n.endsWith('.sql')).sort())for(const sql of(await readFile('drizzle/'+file,'utf8')).split('--> statement-breakpoint'))if(sql.trim())await DB.prepare(sql).run();
+ const {DB}=mf;
  const owner={'oai-authenticated-user-id':'artist'},controller=randomUUID(),host={...owner,'x-controller-token':controller},guest={'x-guest-token':randomUUID()};
  async function req(path,method='GET',body,headers=host,status=200){const response=await mf.dispatchFetch('https://bookends.test/api/'+path,{method,headers:{'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json();assert.equal(response.status,status,JSON.stringify(data));return data;}
  const created=await req('events','POST',{title:'Queue bookends',artist:'Capture Shock',album:'Minnesota Ave.'},host,201),base='events/'+created.id;
