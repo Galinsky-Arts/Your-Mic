@@ -253,9 +253,47 @@ instance remains ended; version/instance checks prevent double advancement
 when the server committed a request whose response was lost. It also warns
 before leaving a playing tab and reacquires a screen wake lock on return.
 
-The offline/downloaded transport remains on `development/local-show-audio`
-and is not part of this production change. Main still needs internet for
-server-coordinated transitions and new queue arrivals.
+The offline/downloaded transport is described in the next section. Without it,
+playback needs internet for server-coordinated transitions and new queue arrivals.
+
+## Downloaded artist shows (opt-in)
+
+Merged into `main` on 2026-11-17 from `development/local-show-audio` (the owner
+waived the hardware-rehearsal hold). It is opt-in: nothing changes unless the
+artist chooses **Download show**. It works on both hosts; on Render/Neon the
+reservation columns come from `drizzle-postgres/0007_local_show.sql`.
+
+In the artist speaker controls, choose **Download show**, wait for all audio to
+be verified, then **Start local playback** while online. Album files and every
+freestyle beat are stored as complete, revisioned IndexedDB blobs. The active
+player keeps only current/next files in memory. A fresh readiness check runs at
+start; incomplete, undecodable, replaced or missing files cannot count as ready.
+The browser's protected-storage request can be denied; that status is displayed.
+
+Local playback advances the playlist, known FIFO queue and playback modes on
+the device. No audio fetch, server lease, server clock or transition request is
+needed to keep the downloaded music moving. Server updates never seek this
+player. Acknowledged monotonic reports publish real playhead/queue progress;
+new queue arrivals merge on reconnect without replaying completed turns.
+Prepared MC audio is saved too. If a needed recording is unavailable, music
+continues. A new person's name or a new edit still requires speech generation
+online. Only the last received queue is available during an outage.
+
+The server reserves the show to that controller until **Finish local playback**
+pauses and releases it. Normal/forced takeover and changing track files are
+blocked during the reservation. Web Locks prevent another tab on the same
+browser from running the show. If the original tab is lost, return in that
+browser while connected to recover its checkpoint, paused for an explicit tap.
+An artist may reset an abandoned reservation on another device only after
+confirming the original speaker has stopped: an offline device cannot receive
+remote stop commands. Offline reopening of the application shell is not included.
+Keep the artist tab open, foregrounded and awake throughout the performance.
+
+Regression coverage includes full-file persistence/retry/quota failures,
+revision invalidation, offline looping and FIFO, poll/ack clock drift, resume,
+announcements, server reservation privacy/ownership, expired leases, stale
+reports, completion and safe release, on D1 and on PostgreSQL. No browser or
+hardware rehearsal has been done yet; run one before relying on it at a show.
 
 
 ## High-energy Miles and audio handoffs

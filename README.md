@@ -9,7 +9,7 @@ The existing Sites deployment uses ChatGPT artist sign-in. Independent Cloudflar
 - **Live (free tier):** https://your-mic.onrender.com (Render web service `your-mic`, Neon PostgreSQL project `your-mic`), auto-deployed from `main`; artist studio at `/admin`, password in the Render env var `ARTIST_PASSWORD`. Suitable for rehearsals and small shows; it sleeps when idle. See [Render free + Neon free](DEPLOYMENT.md#render-free--neon-free-node-runtime).
 - **Recommended for big shows:** Cloudflare Workers Paid + D1 + R2. Ready to deploy (`pnpm cloudflare:launch` or the manual GitHub workflow) once the owner's paid Cloudflare account and secrets exist; not deployed yet.
 - **MC voice:** off on Render until `DEEPGRAM_API_KEY` is set.
-- **Offline/local show audio:** still on `development/local-show-audio`; it no longer rebases cleanly onto `main` and has not been merged.
+- **Downloaded (offline) artist shows:** merged from `development/local-show-audio`, opt-in via **Download show**; not yet rehearsed on real hardware.
 - No hardware/venue rehearsal has been recorded for either host.
 
 ## Run an event

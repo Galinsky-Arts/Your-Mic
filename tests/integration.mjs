@@ -92,18 +92,49 @@ try{
  await DB.prepare("UPDATE events SET controller_until=?,position=?,started_at=?,status='playing' WHERE id=?").bind(Date.now()-5000,23.5,Date.now()-600000,created.id).run();
  const reconnected=await req(base+'/control','POST',{action:'claim',controller},host);
  assert.equal(reconnected.event.position,23.5);
+ // Downloaded shows reserve their controller even when the network lease expires.
+ const localEvent=await req('events','POST',{title:'Downloaded show',artist:'Artist'},owner,201),localBase='events/'+localEvent.id;
+ let localSnap=await req(localBase+'/tracks?filename=local.wav&title=Local&duration=1','POST',wav,owner,201);
+ const localTrack=localSnap.tracks[0].id,localSession=randomUUID();
+ const localGuest={'x-guest-token':randomUUID()};
+ const localQueue=await req(localBase+'/queue','POST',{name:'Offline performer',trackId:localTrack},localGuest,201),localEntry=localQueue.queue[0].id;
+ localSnap=await req(localBase+'/control','POST',{action:'local-start',controller,localSession},host);
+ assert.equal(localSnap.localSession,localSession);assert.equal(localSnap.speakerHere,true);assert(localSnap.artistStorageKey);
+ await req(localBase+'/control','POST',{action:'claim',controller:randomUUID(),force:true},owner,409);
+ await req(localBase+'/tracks','PATCH',{order:[localTrack]},owner,409);
+ await req(localBase,'PATCH',{action:'mode',mode:'auto'},owner,409);
+ const localPublic=await req(localBase,'GET',undefined,localGuest);
+ assert.equal(localPublic.event.local_playback,true);assert(!('localSession' in localPublic));assert(!('artistStorageKey' in localPublic));assert(!JSON.stringify(localPublic).includes(localSession));
+ const localState={...localSnap.event,current_track:localTrack,current_entry:localEntry,album_cursor:localTrack,status:'playing',position:19.75,playback_id:randomUUID()};
+ const report={action:'local-report',controller,localSession,sequence:1,state:localState,completedIds:[]};
+ await DB.prepare('UPDATE events SET controller_until=0 WHERE id=?').bind(localEvent.id).run();
+ localSnap=await req(localBase+'/control','POST',report,host);assert.equal(localSnap.event.position,19.75);assert.equal(localSnap.queue[0].status,'playing');
+ await req(localBase+'/control','POST',{...report,controller:randomUUID(),sequence:2},owner,409);
+ await req(localBase+'/control','POST',{...report,sequence:2},guest,401);
+ await req(localBase+'/control','POST',{...report,sequence:2,state:{...localState,current_track:a.id}},host,400);
+ localSnap=await req(localBase+'/control','POST',{...report,sequence:3,state:{...localState,position:41}},host);
+ localSnap=await req(localBase+'/control','POST',{...report,sequence:2,state:{...localState,position:1}},host);assert.equal(localSnap.event.position,41);
+ localSnap=await req(localBase+'/control','POST',{...report,sequence:4,state:{...localState,current_entry:null,position:0},completedIds:[localEntry]},host);
+ assert.equal((await req(localBase,'GET',undefined,localGuest)).lastTurn.id,localEntry);
+ await req(localBase+'/control','POST',{action:'local-release',controller,localSession,sequence:3},host,409);
+ localSnap=await req(localBase+'/control','POST',{...report,sequence:5,state:{...localState,current_entry:null,status:'paused',position:12.5},completedIds:[localEntry]},host);
+ localSnap=await req(localBase+'/control','POST',{action:'local-release',controller,localSession,sequence:5},host);
+ assert.equal(localSnap.localSession,'');assert.equal(localSnap.event.position,12.5);assert.equal(localSnap.event.status,'paused');
+ await req(localBase+'/control','POST',{...report,sequence:6},host,409);
+ console.log('Local reservation integration passed: ownership, privacy, expired lease, monotonic reports, offline completion, media validation, release and late packets.');
+
  // Artist-only play reporting is independent of the transport and deduplicates retries.
- const stats=base+'/plays', report={trackId:a.id,playbackId:randomUUID(),kind:'live'};
+ const stats=base+'/plays', countReport={trackId:a.id,playbackId:randomUUID(),kind:'live'};
  await req(stats,'GET',undefined,{},401);await req(stats,'GET',undefined,{'oai-authenticated-user-id':'other'},403);
- await req(stats,'POST',report,guest,401);await req(stats,'POST',report,{'oai-authenticated-user-id':'other'},403);
+ await req(stats,'POST',countReport,guest,401);await req(stats,'POST',countReport,{'oai-authenticated-user-id':'other'},403);
  const beforeStats=await req(base,'GET',undefined,host);
  assert.equal((await req(stats,'GET',undefined,owner)).totalLivePlays,0);
  await req(stats,'POST',{trackId:a.id,playbackId:'invalid',kind:'live'},owner,400);
  await req(stats,'POST',{trackId:randomUUID(),playbackId:randomUUID(),kind:'live'},owner,404);
- await Promise.all(Array.from({length:12},()=>req(stats,'POST',report,owner)));
- await req(stats,'POST',{...report,trackId:b.id},owner); // Same audio instance cannot be counted against a second song.
- await req(stats,'POST',{...report,playbackId:randomUUID()},owner); // New repeat of the same song.
- await req(stats,'POST',{trackId:b.id,playbackId:randomUUID(),kind:'rap'},owner); // Delayed report for an earlier song.
+ await Promise.all(Array.from({length:12},()=>req(stats,'POST',countReport,owner)));
+ await req(stats,'POST',{...countReport,trackId:b.id},owner); // Same audio instance cannot be counted against a second song.
+ await req(stats,'POST',{...countReport,playbackId:randomUUID()},owner); // New repeat of the same song.
+ await req(stats,'POST',{trackId:b.id,playbackId:randomUUID(),kind:'rap'},owner); // Delayed countReport for an earlier song.
  const privateReport={trackId:a.id,playbackId:randomUUID(),kind:'preview'};
  await req(stats,'POST',privateReport,{},400);await req(stats,'POST',privateReport,guest);await req(stats,'POST',privateReport,guest);
  await req(stats,'POST',{...privateReport,playbackId:randomUUID()},guest2);
@@ -112,7 +143,7 @@ try{
  assert.deepEqual((await req(base,'GET',undefined,host)).event,beforeStats.event,'Reporting cannot change playback state');
  assert(!(await req(base,'GET',undefined,guest)).tracks.some(t=>'livePlays' in t||'privatePlays' in t||'rapPlays' in t),'Counts must not enter audience snapshots');
  const untouched=await req('events/'+withoutLabel.id+'/plays','GET',undefined,owner);assert.equal(untouched.totalLivePlays,0);
- await DB.prepare('DROP TABLE track_plays').run();await req(stats,'POST',{...report,playbackId:randomUUID()},owner,500);
+ await DB.prepare('DROP TABLE track_plays').run();await req(stats,'POST',{...countReport,playbackId:randomUUID()},owner,500);
  await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:reconnected.event.playback_id,position:24},host);
  assert.equal((await req(base,'GET',undefined,host)).event.position,24,'A broken statistics store cannot break playback or snapshots');
  console.log('Play counts passed: artist-only reads/writes, zero counts, concurrent deduplication, repeats, delayed reports, privacy, transport isolation and failed-store independence.');
